@@ -6,9 +6,11 @@ import {
   addNativeTrackToPlaylist,
   createNativePlaylist,
   deleteNativePlaylist,
+  getNativeHistory,
   getNativeRuntimeInfo,
   listNativePlaylists,
   listNativeTracks,
+  listNativeHistory,
   renameNativePlaylist,
   scanNativeMusicFolder,
   toAppTrack,
@@ -30,6 +32,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [isNativeRuntime, setIsNativeRuntime] = useState(() => isTauri());
   const [nativeTracks, setNativeTracks] = useState<Track[]>([]);
+  const [nativeHistory, setNativeHistory] = useState<Track[]>([]);
   const [activeFormatFilter, setActiveFormatFilter] = useState<string>('ALL');
   const [playlists, setPlaylists] = useState<Playlist[]>(() => {
     if (isTauri()) return [];
@@ -72,13 +75,15 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     void getNativeRuntimeInfo().then(async (runtime) => {
       if (!runtime || !mounted) return;
       setIsNativeRuntime(true);
-      const [files, storedPlaylists] = await Promise.all([
+      const [files, storedPlaylists, history] = await Promise.all([
         listNativeTracks(),
         listNativePlaylists(),
+        listNativeHistory(),
       ]);
       if (mounted) {
         const tracks = files.map((file, index) => toAppTrack(file, index));
         setNativeTracks(tracks);
+        setNativeHistory(history.map((entry, index) => toAppTrack(entry.track, index)));
         onNativeTracksChange?.(tracks);
         setPlaylists(storedPlaylists);
       }
@@ -87,6 +92,18 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     });
     return () => { mounted = false; };
   }, [onNativeTracksChange]);
+
+  // Refresh recent history when playback changes or this view mounts during playback.
+  useEffect(() => {
+    if (!isNativeRuntime || !isPlaying) return;
+    let mounted = true;
+    void listNativeHistory().then((history) => {
+      if (mounted) setNativeHistory(history.map((entry, index) => toAppTrack(entry.track, index)));
+    }).catch((error: unknown) => {
+      console.error('[MPlayer] Native playback history could not be loaded:', error);
+    });
+    return () => { mounted = false; };
+  }, [isNativeRuntime, isPlaying, currentTrack?.id]);
 
   useEffect(() => {
     if (isNativeRuntime) return;
@@ -99,6 +116,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 
   const filterChips = [
     { id: 'ALL', label: `Semua Lagu (${isNativeRuntime ? nativeTracks.length : MOCK_TRACKS.length})` },
+    ...(isNativeRuntime ? [{ id: 'RECENT', label: 'Terakhir Diputar' }] : []),
     { id: 'FLAC', label: 'FLAC Lossless' },
     { id: 'WAV', label: 'WAV Raw' },
     { id: 'HI-RES', label: 'Hi-Res >96kHz' },
@@ -107,7 +125,9 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   ];
 
   const filteredTracks = useMemo(() => {
-    const sourceTracks = isNativeRuntime ? nativeTracks : MOCK_TRACKS;
+    const sourceTracks = isNativeRuntime
+      ? (activeFormatFilter === 'RECENT' ? nativeHistory : nativeTracks)
+      : MOCK_TRACKS;
     return sourceTracks.filter((track) => {
       if (activeFormatFilter === 'FLAC' && track.format !== 'FLAC') return false;
       if (activeFormatFilter === 'WAV' && track.format !== 'WAV') return false;
@@ -124,7 +144,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         track.format.toLowerCase().includes(q)
       );
     });
-  }, [searchQuery, activeFormatFilter, isNativeRuntime, nativeTracks]);
+  }, [searchQuery, activeFormatFilter, isNativeRuntime, nativeTracks, nativeHistory]);
 
   const selectedPlaylist = playlists.find((playlist) => playlist.id === selectedPlaylistId) ?? null;
   const displayedTracks = selectedPlaylist
@@ -362,7 +382,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               return (
                 <button
                   key={chip.id}
-                  onClick={() => setActiveFormatFilter(chip.id)}
+                  onClick={() => {
+                    setActiveFormatFilter(chip.id);
+                    if (chip.id === 'RECENT') setSelectedPlaylistId(null);
+                  }}
                   className={`px-3 py-1 font-label text-xs font-bold uppercase transition-all shadow-[1px_1px_0px_#1a1a1a] border border-outline cursor-pointer ${
                     active
                       ? 'bg-primary text-on-primary'
@@ -501,7 +524,11 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           <div className="flex flex-col gap-2 md:hidden">
             {displayedTracks.length === 0 ? (
               <div className="rounded-xl border border-outline/15 bg-surface-bright px-4 py-10 text-center text-sm text-on-surface-variant">
-                {selectedPlaylist ? 'Playlist ini belum memiliki lagu.' : 'Tidak ada lagu yang cocok dengan pencarian atau filter.'}
+                {activeFormatFilter === 'RECENT'
+                  ? 'Belum ada riwayat pemutaran pada perangkat ini.'
+                  : selectedPlaylist
+                    ? 'Playlist ini belum memiliki lagu.'
+                    : 'Tidak ada lagu yang cocok dengan pencarian atau filter.'}
               </div>
             ) : displayedTracks.map((track) => (
               <article key={track.id} className="rounded-xl border border-outline/15 bg-surface-bright p-3 shadow-sm">
