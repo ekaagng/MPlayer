@@ -322,14 +322,14 @@ export const LyricsView: React.FC<LyricsViewProps> = ({
       {/* Collapsible Advanced Studio Editor Mode */}
       {showEditorMode && (
         <div className="bg-surface-container-low border-2 border-outline p-5 shadow-md flex flex-col gap-4 animate-fade-in">
-          <div className="flex items-center justify-between pb-2 border-b-2 border-outline">
+          <div className="flex flex-col gap-3 border-b-2 border-outline pb-3 sm:flex-row sm:items-center sm:justify-between">
             <span className="font-headline font-bold text-xs uppercase tracking-wider text-on-surface">
               Alat Editor Timestamp &amp; Regex Studio
             </span>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={() => handleShiftOffset(-100)}
-                className="px-2 py-1 bg-surface-bright hover:bg-primary hover:text-white border border-outline text-[11px] font-mono font-bold cursor-pointer"
+                className="min-h-9 rounded-md border border-outline bg-surface-bright px-3 py-1 text-[11px] font-mono font-bold hover:bg-primary hover:text-white"
               >
                 -100ms
               </button>
@@ -341,13 +341,13 @@ export const LyricsView: React.FC<LyricsViewProps> = ({
               </button>
               <button
                 onClick={() => fileInputRef.current?.click()}
-                className="px-2.5 py-1 bg-surface-bright hover:bg-primary hover:text-white border border-outline text-[10px] font-headline font-bold uppercase cursor-pointer"
+                className="min-h-9 rounded-md border border-outline bg-surface-bright px-3 py-1 text-[10px] font-headline font-bold uppercase hover:bg-primary hover:text-white"
               >
                 Impor .LRC
               </button>
               <button
                 onClick={handleCommitToDb}
-                className={`px-3 py-1 font-headline font-bold text-[10px] uppercase border border-outline cursor-pointer ${
+                className={`min-h-9 rounded-md px-3 py-1 font-headline font-bold text-[10px] uppercase border border-outline cursor-pointer ${
                   dbSaved ? 'bg-tertiary text-white' : 'bg-primary-container text-on-primary-container'
                 }`}
               >
@@ -373,24 +373,24 @@ export const LyricsView: React.FC<LyricsViewProps> = ({
           </button>
 
           {/* Regex Find/Replace */}
-          <div className="flex gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row">
             <input
               type="text"
               value={regexFind}
               onChange={(e) => setRegexFind(e.target.value)}
               placeholder="Cari kata/pola teks..."
-              className="flex-1 bg-surface-bright px-3 py-1.5 text-xs font-mono border border-outline focus:outline-none"
+              className="w-full min-w-0 flex-1 bg-surface-bright px-3 py-2 text-xs font-mono border border-outline focus:outline-none"
             />
             <input
               type="text"
               value={regexReplace}
               onChange={(e) => setRegexReplace(e.target.value)}
               placeholder="Ganti dengan..."
-              className="w-40 bg-surface-bright px-3 py-1.5 text-xs font-mono border border-outline focus:outline-none"
+              className="w-full min-w-0 bg-surface-bright px-3 py-2 text-xs font-mono border border-outline focus:outline-none sm:w-40"
             />
             <button
               onClick={handleApplyRegex}
-              className="px-3 py-1 bg-primary text-white font-label font-bold text-xs uppercase border border-outline hover:bg-secondary cursor-pointer"
+              className="min-h-10 rounded-lg border border-outline bg-primary px-4 py-2 text-xs font-bold uppercase text-white hover:bg-secondary cursor-pointer sm:min-h-0 sm:rounded-none sm:px-3 sm:py-1"
             >
               Ganti
             </button>
