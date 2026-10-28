@@ -48,7 +48,6 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const [syncToast, setSyncToast] = useState<string | null>(null);
   const [swipedItemRestored, setSwipedItemRestored] = useState(false);
   const [showAddFolderModal, setShowAddFolderModal] = useState(false);
-  const [showChecksumModal, setShowChecksumModal] = useState(false);
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
 
   useEffect(() => {
@@ -219,7 +218,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             <button
               onClick={handleSync}
               className="flex flex-1 items-center justify-center gap-1.5 px-3 py-2 bg-surface-container hover:bg-surface-container-high text-xs font-label font-bold uppercase text-on-surface border border-outline cursor-pointer transition-colors shadow-[1px_1px_0px_#1a1a1a] sm:flex-none"
-              title="Perbarui daftar lagu"
+              title="Simulasikan pembaruan daftar demo"
             >
               <span className={`material-symbols-outlined text-[16px] text-tertiary ${isSyncing ? 'animate-spin' : ''}`}>
                 sync
@@ -272,62 +271,14 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         </div>
       </div>
 
-      {/* Collapsible Advanced Options: Inode Paths, Sources, Storage & Integrity */}
+      {/* Advanced scanning status */}
       {showAdvancedOptions && (
-        <div className="bg-surface-container-low p-4 border-2 border-outline shadow-md flex flex-col gap-4 animate-fade-in">
-          <div className="flex items-center justify-between pb-2 border-b border-outline/20">
-            <div className="flex items-center gap-2">
-              <span className="material-symbols-outlined text-tertiary text-lg">database</span>
-              <span className="font-headline font-bold text-xs uppercase tracking-wider text-on-surface">
-                Pengaturan Lanjutan Penyimpanan &amp; Integritas Data
-              </span>
-            </div>
-            <span className="text-[10px] font-mono bg-surface-bright px-2 py-0.5 border border-outline/20">
-              Opsional • Offline Standby
-            </span>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            {/* Source 1 */}
-            <div className="p-3 bg-surface-bright border border-outline flex flex-col justify-between">
-              <div>
-                <span className="text-[10px] font-mono font-bold text-on-surface-variant block uppercase">Root Path 1 (NTFS)</span>
-                <span className="font-headline font-bold text-xs text-on-surface block mt-1">D:\Music\Lossless Archives</span>
-                <span className="text-[11px] font-mono text-on-surface-variant mt-0.5 block">14,210 tracks • 682.4 GB</span>
-              </div>
-              <div className="w-full h-1.5 bg-surface-container mt-2 overflow-hidden border border-outline/20">
-                <div className="bg-tertiary h-full w-[74%]"></div>
-              </div>
-            </div>
-
-            {/* Source 2 */}
-            <div className="p-3 bg-surface-bright border border-outline flex flex-col justify-between">
-              <div>
-                <span className="text-[10px] font-mono font-bold text-on-surface-variant block uppercase">Root Path 2 (exFAT)</span>
-                <span className="font-headline font-bold text-xs text-on-surface block mt-1">E:\Audio\Vinyl Dips</span>
-                <span className="text-[11px] font-mono text-on-surface-variant mt-0.5 block">4,210 tracks • 314.1 GB</span>
-              </div>
-              <div className="w-full h-1.5 bg-surface-container mt-2 overflow-hidden border border-outline/20">
-                <div className="bg-primary h-full w-[42%]"></div>
-              </div>
-            </div>
-
-            {/* SQLite Health Actions */}
-            <div className="p-3 bg-surface-bright border border-outline flex flex-col justify-between">
-              <div>
-                <span className="text-[10px] font-mono font-bold text-on-surface-variant block uppercase">SQLite Engine</span>
-                <span className="font-headline font-bold text-xs text-tertiary block mt-1">Integrity: 100% OK (WAL Mode)</span>
-                <span className="text-[10px] font-mono text-on-surface-variant mt-0.5 block">Zero Telemetry • RAM Cache: 840MB</span>
-              </div>
-              <button
-                onClick={() => setShowChecksumModal(true)}
-                className="mt-2 w-full py-1 px-2 bg-primary text-on-primary font-headline font-bold text-[10px] uppercase hover:bg-primary-container hover:text-on-primary-container transition-colors cursor-pointer border border-outline"
-              >
-                Verifikasi Checksum
-              </button>
-            </div>
-          </div>
-        </div>
+        <section className="rounded-xl border border-outline/15 bg-surface-bright p-3 text-sm sm:p-4">
+          <h2 className="font-headline text-sm font-bold text-on-surface">Status Library Preview</h2>
+          <p className="mt-1 text-xs leading-relaxed text-on-surface-variant">
+            Pemindaian folder lokal, pembacaan metadata, checksum, dan database SQLite native belum terhubung. Daftar lagu saat ini menggunakan data contoh; tidak ada klaim indeks atau audit penyimpanan yang dijalankan.
+          </p>
+        </section>
       )}
 
       {/* Main Vault Track List & Playlists */}
@@ -669,7 +620,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               </div>
               <div className="flex items-center gap-2 text-[10px]">
                 <span className="font-bold text-primary bg-primary-container px-1.5 py-0.5 border border-outline">
-                  100% Offline Database
+                  Preview · Demo Data
                 </span>
               </div>
             </div>
@@ -762,10 +713,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               </button>
             </div>
             <p className="text-xs text-on-surface-variant font-body leading-relaxed">
-              Resonance Core memindai folder lokal tanpa telemetri atau koneksi internet. Semua file FLAC, WAV, DSD, dan MP3 di dalam folder akan langsung diindeks ke dalam database lokal.
+              Ini adalah preview antarmuka. Pemilihan folder, pemindaian file, dan penyimpanan database native belum diimplementasikan pada versi web ini.
             </p>
             <div className="flex flex-col gap-1.5">
-              <label className="text-[10px] font-label font-bold uppercase text-on-surface-variant">Direktori Folder</label>
+              <label className="text-[10px] font-label font-bold uppercase text-on-surface-variant">Status folder musik</label>
               <input
                 type="text"
                 defaultValue="D:\Music\Lossless_Masters_2024"
@@ -782,7 +733,6 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               <button
                 onClick={() => {
                   setShowAddFolderModal(false);
-                  handleSync();
                 }}
                 className="px-4 py-2 bg-primary text-on-primary font-headline font-bold text-xs uppercase hover:bg-primary-container hover:text-on-primary-container transition-colors cursor-pointer border border-outline"
               >
@@ -793,36 +743,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         </div>
       )}
 
-      {/* Modal: Verify Checksums */}
-      {showChecksumModal && (
-        <div className="fixed inset-0 bg-primary/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-surface-bright border-2 border-outline shadow-[6px_6px_0px_#1a1a1a] p-6 max-w-lg w-full flex flex-col gap-4">
-            <div className="flex items-center justify-between border-b-2 border-outline pb-2">
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-primary text-2xl">verified</span>
-                <h3 className="font-headline font-bold text-base uppercase">Audit Integritas Checksum</h3>
-              </div>
-              <button onClick={() => setShowChecksumModal(false)} className="p-1 hover:bg-surface-container cursor-pointer">
-                <span className="material-symbols-outlined text-lg">close</span>
-              </button>
-            </div>
-            <div className="space-y-2 font-mono text-xs bg-surface-container-lowest p-3 border-2 border-outline">
-              <div className="text-tertiary font-bold">✓ SQLite Database: PRAGMA integrity_check -&gt; "OK"</div>
-              <div className="text-primary font-semibold">✓ 18,420 Hash Blok Audio MD5 Terverifikasi</div>
-              <div className="text-on-surface-variant">✓ Zero Bit-Rot Detected pada arsip 996.5 GB</div>
-              <div className="text-secondary font-bold">✓ Latensi Akses I/O Rata-rata: 0.28ms</div>
-            </div>
-            <div className="flex justify-end pt-2">
-              <button
-                onClick={() => setShowChecksumModal(false)}
-                className="px-4 py-2 bg-primary text-on-primary font-headline font-bold text-xs uppercase cursor-pointer"
-              >
-                Tutup
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+
     </div>
   );
 };
