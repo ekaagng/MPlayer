@@ -45,27 +45,13 @@ export const OutputSettingsView: React.FC<OutputSettingsViewProps> = ({
   };
 
   const handleRunSpike = () => {
-    setSpikeTesting(true);
-    setSpikePatternState('MENGIRIMKAN SINYAL UJI BURST...');
-    setSpikeProgress(30);
-
-    setTimeout(() => {
-      setSpikeProgress(75);
-    }, 300);
-
-    setTimeout(() => {
-      setSpikeProgress(100);
-      setSpikePatternState('INTEGRITAS BIT-PERFECT 100% OK');
-      setSpikeTesting(false);
-      showToast(
-        'Uji Integritas Selesai',
-        'Jalur sinyal audio 100% bit-perfect tanpa distorsi atau pergeseran sample clock.'
-      );
-      setTimeout(() => {
-        setSpikeProgress(0);
-        setSpikePatternState('SIAP DIUJI');
-      }, 3000);
-    }, 800);
+    setSpikeTesting(false);
+    setSpikeProgress(0);
+    setSpikePatternState('TIDAK DAPAT DIVERIFIKASI');
+    showToast(
+      'Diagnostik tidak tersedia',
+      'Preview browser tidak memiliki akses ke WASAPI atau jalur output native. Status bit-perfect tidak dapat diverifikasi.'
+    );
   };
 
   const handleExportLog = () => {
@@ -74,7 +60,7 @@ export const OutputSettingsView: React.FC<OutputSettingsViewProps> = ({
       'RESONANCE CORE - AUDIO ENGINE DIAGNOSTIC REPORT',
       '====================================================',
       `Waktu: ${new Date().toISOString()}`,
-      'Engine: Microsoft Windows WASAPI (Exclusive Mode)',
+      'Engine: Browser Web Audio preview; native WASAPI not connected',
       `Endpoint: ${
         settings.activeDevice === 'topping'
           ? 'Topping D90 III Sabre DAC [WASAPI Exclusive]'
@@ -83,9 +69,9 @@ export const OutputSettingsView: React.FC<OutputSettingsViewProps> = ({
           : 'Realtek High Definition Audio [Shared]'
       }`,
       `Buffer: ${settings.bufferSamples} samples (${settings.latencyMs}ms)`,
-      'Status: 100% Bit-Locked (0.00 dB)',
+      'Status: UNVERIFIED — native output path is unavailable in browser preview',
       `DSP Bypass: ${isBitPerfect ? 'Aktif (1:1)' : 'Tergantikan Filter EQ'}`,
-      'Spike Test: PASSED (0 bit errors)',
+      'Spike Test: NOT RUN — native loopback/bit comparison is unavailable',
       '====================================================',
     ].join('\n');
 
