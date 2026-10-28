@@ -329,6 +329,21 @@ where
     }
 }
 
+fn load_native_equalizer_settings(path: &Path) -> Result<NativeEqualizerSettings, String> {
+    let connection = open_database(path)?;
+    let stored: Option<String> = connection.query_row(
+        "SELECT value FROM settings WHERE key = 'native_equalizer'",
+        [],
+        |row| row.get(0),
+    ).optional().map_err(|error| format!("Pengaturan EQ tidak dapat dibaca: {error}"))?;
+
+    match stored {
+        Some(value) => serde_json::from_str(&value)
+            .map_err(|error| format!("Pengaturan EQ tersimpan tidak valid: {error}")),
+        None => Ok(NativeEqualizerSettings::default()),
+    }
+}
+
 fn initialize_database(path: &Path) -> Result<(), String> {
     let connection = Connection::open(path).map_err(|error| format!("SQLite tidak dapat dibuka: {error}"))?;
     connection
@@ -785,6 +800,50 @@ fn list_recent_history_from_db(connection: &Connection, limit: u32) -> Result<Ve
 }
 
 #[tauri::command]
+fn native_get_equalizer(state: State<'_, AppState>) -> Result<NativeEqualizerSettings, String> {
+    state.equalizer.settings.read()
+        .map(|settings| *settings)
+        .map_err(|_| "Pengaturan EQ native terkunci.".to_string())
+}
+
+#[tauri::command]
+fn native_set_equalizer(
+    enabled: bool,
+    preamp_db: f32,
+    auto_preamp: bool,
+    bands_db: Vec<f32>,
+    state: State<'_, AppState>,
+) -> Result<NativeEqualizerSettings, String> {
+    if !preamp_db.is_finite() || !(-12.0..=12.0).contains(&preamp_db) {
+        return Err("Preamp EQ harus berupa angka dari -12 sampai +12 dB.".to_string());
+    }
+    let bands_db: [f32; EQ_BAND_COUNT] = bands_db.try_into()
+        .map_err(|values: Vec<f32>| format!("EQ memerlukan tepat {EQ_BAND_COUNT} band, bukan {}.", values.len()))?;
+    if bands_db.iter().any(|value| !value.is_finite() || !(-12.0..=12.0).contains(value)) {
+        return Err("Setiap band EQ harus berada pada rentang -12 sampai +12 dB.".to_string());
+    }
+
+    let settings = NativeEqualizerSettings { enabled, preamp_db, auto_preamp, bands_db };
+    let serialized = serde_json::to_string(&settings)
+        .map_err(|error| format!("Pengaturan EQ gagal diserialisasi: {error}"))?;
+    let connection = open_database(&state.database_path)?;
+    connection.execute(
+        "INSERT INTO settings (key, value, updated_at)
+         VALUES ('native_equalizer', ?1, CURRENT_TIMESTAMP)
+         ON CONFLICT(key) DO UPDATE SET
+           value = excluded.value,
+           updated_at = CURRENT_TIMESTAMP",
+        [serialized],
+    ).map_err(|error| format!("Pengaturan EQ gagal disimpan ke SQLite: {error}"))?;
+
+    let mut live_settings = state.equalizer.settings.write()
+        .map_err(|_| "Pengaturan EQ native terkunci.".to_string())?;
+    *live_settings = settings;
+    state.equalizer.generation.fetch_add(1, Ordering::Release);
+    Ok(settings)
+}
+
+#[tauri::command]
 fn native_runtime_info() -> RuntimeInfo {
     RuntimeInfo {
         platform: std::env::consts::OS.to_string(),
@@ -957,6 +1016,7 @@ fn native_play_track(
     let canonical_path = file_path.canonicalize().unwrap_or_else(|_| file_path.clone());
     let canonical_path_string = canonical_path.to_string_lossy().into_owned();
     let database_path = state.database_path.clone();
+    let equalizer = Arc::clone(&state.equalizer);
     let indexed_track_id = open_database(&database_path).ok().and_then(|connection| {
         connection.query_row(
             "SELECT id FROM tracks WHERE path = ?1",
@@ -979,7 +1039,7 @@ fn native_play_track(
 
     let stream = playback.output_stream.as_ref().ok_or("Audio output belum siap.")?;
     let sink = Sink::connect_new(stream.mixer());
-    sink.append(decoder);
+    sink.append(NativeEqualizerSource::new(decoder, equalizer));
     sink.set_volume(playback.volume.clamp(0.0, 1.0));
     if let Some(position) = start_from_ms.filter(|position| *position > 0) {
         sink.pause();
@@ -1128,6 +1188,36 @@ mod tests {
     }
 
     #[test]
+    fn zero_gain_filter_is_identity() {
+        let filter = super::BiquadCoefficients::peaking(1_000.0, 44_100, 0.0);
+        assert!((filter.b0 - 1.0).abs() < 1e-6);
+        assert!(filter.b1.abs() < 1e-6);
+        assert!(filter.b2.abs() < 1e-6);
+        assert!(filter.a1.abs() < 1e-6);
+        assert!(filter.a2.abs() < 1e-6);
+    }
+
+    #[test]
+    fn peaking_filter_coefficients_remain_finite_at_supported_rates() {
+        for sample_rate in [32_000, 44_100, 48_000, 96_000, 192_000, 384_000] {
+            for gain_db in [-12.0, -6.0, -1.0, 1.0, 6.0, 12.0] {
+                let filter = super::BiquadCoefficients::peaking(16_000.0, sample_rate, gain_db);
+                assert!(filter.b0.is_finite());
+                assert!(filter.b1.is_finite());
+                assert!(filter.b2.is_finite());
+                assert!(filter.a1.is_finite());
+                assert!(filter.a2.is_finite());
+            }
+        }
+    }
+
+    #[test]
+    fn auto_preamp_accounts_for_positive_equalizer_boosts() {
+        let settings = super::NativeEqualizerSettings::default();
+        assert!((settings.effective_preamp_db() - (-5.0)).abs() < 0.001);
+    }
+
+    #[test]
     fn initializes_sqlite_schema_and_reads_indexed_tracks() {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1224,17 +1314,22 @@ pub fn run() {
             fs::create_dir_all(&data_directory)?;
             let database_path = data_directory.join("mplayer-library.sqlite3");
             initialize_database(&database_path).map_err(std::io::Error::other)?;
+            let equalizer_settings = load_native_equalizer_settings(&database_path)
+                .map_err(std::io::Error::other)?;
             app.manage(AppState {
                 database_path,
                 playback: Mutex::new(NativePlayback {
                     volume: 0.85,
                     ..NativePlayback::default()
                 }),
+                equalizer: Arc::new(SharedEqualizer::new(equalizer_settings)),
             });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             native_runtime_info,
+            native_get_equalizer,
+            native_set_equalizer,
             native_list_tracks,
             native_get_recent_history,
             native_list_playlists,
