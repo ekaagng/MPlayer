@@ -2,7 +2,17 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { Track, Playlist } from '../types/audio';
 import { MOCK_TRACKS, INITIAL_PLAYLISTS } from '../data/mockTracks';
-import { getNativeRuntimeInfo, listNativeTracks, scanNativeMusicFolder, toAppTrack } from '../services/nativeBridge';
+import {
+  addNativeTrackToPlaylist,
+  createNativePlaylist,
+  deleteNativePlaylist,
+  getNativeRuntimeInfo,
+  listNativePlaylists,
+  listNativeTracks,
+  renameNativePlaylist,
+  scanNativeMusicFolder,
+  toAppTrack,
+} from '../services/nativeBridge';
 
 interface LibraryViewProps {
   currentTrack: Track | null;
@@ -20,6 +30,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const [nativeTracks, setNativeTracks] = useState<Track[]>([]);
   const [activeFormatFilter, setActiveFormatFilter] = useState<string>('ALL');
   const [playlists, setPlaylists] = useState<Playlist[]>(() => {
+    if (isTauri()) return [];
     try {
       const stored = window.localStorage.getItem('mplayer:playlists');
       if (stored) {
@@ -59,8 +70,14 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     void getNativeRuntimeInfo().then(async (runtime) => {
       if (!runtime || !mounted) return;
       setIsNativeRuntime(true);
-      const files = await listNativeTracks();
-      if (mounted) setNativeTracks(files.map((file, index) => toAppTrack(file, index)));
+      const [files, storedPlaylists] = await Promise.all([
+        listNativeTracks(),
+        listNativePlaylists(),
+      ]);
+      if (mounted) {
+        setNativeTracks(files.map((file, index) => toAppTrack(file, index)));
+        setPlaylists(storedPlaylists);
+      }
     }).catch((error: unknown) => {
       console.error('[MPlayer] Native library initialization failed:', error);
     });
@@ -68,12 +85,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   }, []);
 
   useEffect(() => {
+    if (isNativeRuntime) return;
     try {
       window.localStorage.setItem('mplayer:playlists', JSON.stringify(playlists));
     } catch {
       setSyncToast('Playlist tidak dapat disimpan di penyimpanan browser ini.');
     }
-  }, [playlists]);
+  }, [playlists, isNativeRuntime]);
 
   const filterChips = [
     { id: 'ALL', label: `Semua Lagu (${isNativeRuntime ? nativeTracks.length : MOCK_TRACKS.length})` },
@@ -147,16 +165,31 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     }, 600);
   };
 
-  const handleAddToPlaylist = (playlistId: string, track: Track) => {
+  const handleAddToPlaylist = async (playlistId: string, track: Track) => {
     const target = playlists.find((playlist) => playlist.id === playlistId);
     if (!target) return;
     const currentTrackIds = target.trackIds ?? [];
     if (currentTrackIds.includes(track.id)) {
       setSyncToast('Lagu ini sudah ada di playlist tersebut.');
       setTrackToAdd(null);
-      setTimeout(() => setSyncToast(null), 3000);
+      window.setTimeout(() => setSyncToast(null), 3000);
       return;
     }
+
+    if (isNativeRuntime) {
+      try {
+        const updated = await addNativeTrackToPlaylist(playlistId, track.id);
+        setPlaylists((prev) => prev.map((playlist) => playlist.id === updated.id ? updated : playlist));
+        setSelectedPlaylistId(updated.id);
+        setTrackToAdd(null);
+        setSyncToast('Lagu ditambahkan ke playlist SQLite lokal.');
+      } catch (error) {
+        setSyncToast(error instanceof Error ? error.message : 'Lagu gagal ditambahkan ke playlist.');
+      }
+      window.setTimeout(() => setSyncToast(null), 3500);
+      return;
+    }
+
     const nextTrackIds = [...currentTrackIds, track.id];
     setPlaylists((prev) => prev.map((playlist) => playlist.id === playlistId
       ? { ...playlist, trackIds: nextTrackIds, trackCount: nextTrackIds.length, subtitle: `${nextTrackIds.length} lagu` }
@@ -165,10 +198,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     setSelectedPlaylistId(playlistId);
     setTrackToAdd(null);
     setSyncToast('Lagu ditambahkan ke playlist.');
-    setTimeout(() => setSyncToast(null), 3000);
+    window.setTimeout(() => setSyncToast(null), 3000);
   };
 
-  const handleSavePlaylist = () => {
+  const handleSavePlaylist = async () => {
     const title = playlistName.trim();
     if (!title) {
       setSyncToast('Nama playlist tidak boleh kosong.');
@@ -180,6 +213,28 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     );
     if (duplicateName) {
       setSyncToast('Nama playlist tersebut sudah digunakan.');
+      return;
+    }
+
+    if (isNativeRuntime) {
+      try {
+        const updated = playlistEditor
+          ? await renameNativePlaylist(playlistEditor.id, title)
+          : await createNativePlaylist(title);
+        setPlaylists((prev) => playlistEditor
+          ? prev.map((playlist) => playlist.id === updated.id ? updated : playlist)
+          : [...prev, updated]);
+        if (!playlistEditor) setSelectedPlaylistId(updated.id);
+        setPlaylistEditor(null);
+        setIsPlaylistEditorOpen(false);
+        setPlaylistName('');
+        setSyncToast(playlistEditor ? 'Nama playlist diperbarui di SQLite.' : 'Playlist dibuat di SQLite lokal.');
+      } catch (error) {
+        setSyncToast(error instanceof Error ? error.message : 'Perubahan playlist gagal disimpan.');
+        window.setTimeout(() => setSyncToast(null), 3500);
+        return;
+      }
+      window.setTimeout(() => setSyncToast(null), 3000);
       return;
     }
 
@@ -205,8 +260,17 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     setTimeout(() => setSyncToast(null), 3000);
   };
 
-  const handleDeletePlaylist = () => {
+  const handleDeletePlaylist = async () => {
     if (!playlistToDelete) return;
+    if (isNativeRuntime) {
+      try {
+        await deleteNativePlaylist(playlistToDelete.id);
+      } catch (error) {
+        setSyncToast(error instanceof Error ? error.message : 'Playlist gagal dihapus dari SQLite.');
+        window.setTimeout(() => setSyncToast(null), 3500);
+        return;
+      }
+    }
     setPlaylists((prev) => prev.filter((playlist) => playlist.id !== playlistToDelete.id));
     if (selectedPlaylistId === playlistToDelete.id) setSelectedPlaylistId(null);
     setSyncToast(`Playlist "${playlistToDelete.title}" dihapus.`);
