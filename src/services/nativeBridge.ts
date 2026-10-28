@@ -36,12 +36,25 @@ export interface NativePlaylistRecord {
   trackIds: number[];
 }
 
+export interface NativeHistoryEntry {
+  track: NativeTrackFile;
+  playedAt: string;
+  lastPositionMs: number;
+}
+
 export interface NativePlaybackSnapshot {
   path: string | null;
   isPlaying: boolean;
   currentTimeMs: number;
   durationMs: number;
   volume: number;
+}
+
+export async function listNativeHistory(limit = 20): Promise<NativeHistoryEntry[]> {
+  if (!isTauri()) return [];
+  return invoke<NativeHistoryEntry[]>('native_get_recent_history', {
+    limit: Math.max(1, Math.min(100, Math.floor(limit))),
+  });
 }
 
 export async function listNativePlaylists(): Promise<Playlist[]> {
