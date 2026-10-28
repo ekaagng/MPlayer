@@ -1,3 +1,4 @@
+use lofty::{file::{AudioFile, TaggedFileExt}, tag::Accessor};
 use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
@@ -43,9 +44,15 @@ struct NativeTrack {
     id: i64,
     path: String,
     title: String,
+    artist: String,
+    album: String,
     format: String,
     size_bytes: u64,
     modified_at: Option<i64>,
+    duration_ms: Option<i64>,
+    sample_rate_hz: Option<i64>,
+    bit_depth: Option<i64>,
+    bitrate_bps: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -273,9 +280,52 @@ fn save_lyrics_to_db(connection: &Connection, track_id: i64, lrc_text: &str) -> 
 struct ScannedFile {
     path: String,
     title: String,
+    artist: String,
+    album: String,
     format: String,
     size_bytes: i64,
     modified_at: Option<i64>,
+    duration_ms: Option<i64>,
+    sample_rate_hz: Option<i64>,
+    bit_depth: Option<i64>,
+    bitrate_bps: Option<i64>,
+}
+
+#[derive(Debug, Default)]
+struct AudioMetadata {
+    title: Option<String>,
+    artist: Option<String>,
+    album: Option<String>,
+    duration_ms: Option<i64>,
+    sample_rate_hz: Option<i64>,
+    bit_depth: Option<i64>,
+    bitrate_bps: Option<i64>,
+}
+
+fn read_audio_metadata(path: &Path) -> AudioMetadata {
+    let tagged_file = match lofty::read_from_path(path) {
+        Ok(file) => file,
+        Err(_) => return AudioMetadata::default(),
+    };
+
+    let tag = tagged_file.primary_tag().or_else(|| tagged_file.first_tag());
+    let nonempty = |value: Option<std::borrow::Cow<'_, str>>| {
+        value.map(|text| text.into_owned()).filter(|text| !text.trim().is_empty())
+    };
+    let properties = tagged_file.properties();
+    let duration_ms = properties.duration().as_millis().min(i64::MAX as u128) as i64;
+
+    AudioMetadata {
+        title: tag.and_then(|value| nonempty(value.title())),
+        artist: tag.and_then(|value| nonempty(value.artist())),
+        album: tag.and_then(|value| nonempty(value.album())),
+        duration_ms: (duration_ms > 0).then_some(duration_ms),
+        sample_rate_hz: properties.sample_rate().map(i64::from),
+        bit_depth: properties.bit_depth().map(i64::from),
+        bitrate_bps: properties.audio_bitrate()
+            .or_else(|| properties.overall_bitrate())
+            .map(|kbps| i64::from(kbps).saturating_mul(1000)),
+    }
 }
 
 fn apply_scan_results(
@@ -301,15 +351,27 @@ fn apply_scan_results(
 
     for file in files {
         transaction.execute(
-            "INSERT INTO tracks (path, title, format, size_bytes, modified_at, scanned_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP)
+            "INSERT INTO tracks
+               (path, title, artist, album, format, size_bytes, modified_at,
+                duration_ms, sample_rate_hz, bit_depth, bitrate_bps, scanned_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, CURRENT_TIMESTAMP)
              ON CONFLICT(path) DO UPDATE SET
                title = excluded.title,
+               artist = excluded.artist,
+               album = excluded.album,
                format = excluded.format,
                size_bytes = excluded.size_bytes,
                modified_at = excluded.modified_at,
+               duration_ms = excluded.duration_ms,
+               sample_rate_hz = excluded.sample_rate_hz,
+               bit_depth = excluded.bit_depth,
+               bitrate_bps = excluded.bitrate_bps,
                scanned_at = CURRENT_TIMESTAMP",
-            params![file.path, file.title, file.format, file.size_bytes, file.modified_at],
+            params![
+                file.path, file.title, file.artist, file.album, file.format,
+                file.size_bytes, file.modified_at, file.duration_ms,
+                file.sample_rate_hz, file.bit_depth, file.bitrate_bps
+            ],
         ).map_err(|error| format!("Menyimpan indeks track gagal: {error}"))?;
 
         let track_id: i64 = transaction.query_row(
@@ -381,15 +443,21 @@ fn read_track(row: &rusqlite::Row<'_>) -> rusqlite::Result<NativeTrack> {
         id: row.get(0)?,
         path: row.get(1)?,
         title: row.get(2)?,
-        format: row.get(3)?,
-        size_bytes: row.get::<_, i64>(4)?.max(0) as u64,
-        modified_at: row.get(5)?,
+        artist: row.get(3)?,
+        album: row.get(4)?,
+        format: row.get(5)?,
+        size_bytes: row.get::<_, i64>(6)?.max(0) as u64,
+        modified_at: row.get(7)?,
+        duration_ms: row.get(8)?,
+        sample_rate_hz: row.get(9)?,
+        bit_depth: row.get(10)?,
+        bitrate_bps: row.get(11)?,
     })
 }
 
 fn list_tracks_from_db(connection: &Connection) -> Result<Vec<NativeTrack>, String> {
     let mut statement = connection
-        .prepare("SELECT id, path, title, format, size_bytes, modified_at FROM tracks ORDER BY title COLLATE NOCASE")
+        .prepare("SELECT id, path, title, artist, album, format, size_bytes, modified_at, duration_ms, sample_rate_hz, bit_depth, bitrate_bps FROM tracks ORDER BY title COLLATE NOCASE")
         .map_err(|error| format!("Query library gagal: {error}"))?;
     let rows = statement
         .query_map([], read_track)
@@ -515,12 +583,20 @@ fn native_scan_music_directory(path: String, state: State<'_, AppState>) -> Resu
             .and_then(|value| value.to_str())
             .unwrap_or("unknown")
             .to_ascii_uppercase();
+        let audio_metadata = read_audio_metadata(file_path);
+        let title = audio_metadata.title.unwrap_or(title);
         scanned_files.push(ScannedFile {
             path: canonical_path,
+            artist: audio_metadata.artist.unwrap_or_default(),
+            album: audio_metadata.album.unwrap_or_default(),
             title,
             format,
             size_bytes: metadata.len().min(i64::MAX as u64) as i64,
             modified_at: file_modified_timestamp(file_path),
+            duration_ms: audio_metadata.duration_ms,
+            sample_rate_hz: audio_metadata.sample_rate_hz,
+            bit_depth: audio_metadata.bit_depth,
+            bitrate_bps: audio_metadata.bitrate_bps,
         });
     }
 
@@ -700,9 +776,12 @@ mod tests {
         assert_eq!(table_count, 8);
 
         connection.execute(
-            "INSERT INTO tracks (path, title, format, size_bytes, modified_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params!["/music/test.flac", "test", "FLAC", 4096_i64, Option::<i64>::None],
+            "INSERT INTO tracks (path, title, artist, album, format, size_bytes, modified_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                "/music/test.flac", "test", "", "", "FLAC",
+                4096_i64, Option::<i64>::None
+            ],
         ).expect("track should be indexed");
         let tracks = list_tracks_from_db(&connection).expect("indexed tracks should be readable");
         assert_eq!(tracks.len(), 1);
@@ -716,9 +795,15 @@ mod tests {
         let make_file = |name: &str| ScannedFile {
             path: format!("{root}/{name}"),
             title: name.trim_end_matches(".flac").trim_end_matches(".wav").to_string(),
+            artist: String::new(),
+            album: String::new(),
             format: if name.ends_with(".wav") { "WAV".to_string() } else { "FLAC".to_string() },
             size_bytes: 2048,
             modified_at: None,
+            duration_ms: None,
+            sample_rate_hz: None,
+            bit_depth: None,
+            bitrate_bps: None,
         };
         apply_scan_results(&connection, &root, &[make_file("first.flac"), make_file("second.wav")], false)
             .expect("first scan should index all tracks");
