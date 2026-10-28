@@ -24,6 +24,8 @@ export interface Playlist {
   id: string;
   title: string;
   trackCount: number;
+  /** Track IDs are unique within a playlist; counts are derived from this list. */
+  trackIds?: string[];
   subtitle: string;
   isDropZone?: boolean;
 }
