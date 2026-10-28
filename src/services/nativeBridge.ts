@@ -1,6 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
-import type { Track } from '../types/audio';
+import type { Playlist, Track } from '../types/audio';
 
 export interface NativeRuntimeInfo {
   platform: string;
@@ -24,12 +24,93 @@ export interface NativeScanResult {
   scannedFolder: string;
 }
 
+export interface NativePlaylistRecord {
+  id: number;
+  name: string;
+  trackIds: number[];
+}
+
 export interface NativePlaybackSnapshot {
   path: string | null;
   isPlaying: boolean;
   currentTimeMs: number;
   durationMs: number;
   volume: number;
+}
+
+export async function listNativePlaylists(): Promise<Playlist[]> {
+  if (!isTauri()) return [];
+  const playlists = await invoke<NativePlaylistRecord[]>('native_list_playlists');
+  return playlists.map(toAppPlaylist);
+}
+
+export async function createNativePlaylist(name: string): Promise<Playlist> {
+  requireNativeRuntime();
+  return toAppPlaylist(await invoke<NativePlaylistRecord>('native_create_playlist', { name }));
+}
+
+export async function renameNativePlaylist(id: string, name: string): Promise<Playlist> {
+  requireNativeRuntime();
+  const playlistId = parseNativePlaylistId(id);
+  return toAppPlaylist(await invoke<NativePlaylistRecord>('native_rename_playlist', { playlistId, name }));
+}
+
+export async function deleteNativePlaylist(id: string): Promise<void> {
+  requireNativeRuntime();
+  const playlistId = parseNativePlaylistId(id);
+  await invoke('native_delete_playlist', { playlistId });
+}
+
+export async function addNativeTrackToPlaylist(playlistId: string, trackId: string): Promise<Playlist> {
+  requireNativeRuntime();
+  const nativePlaylistId = parseNativePlaylistId(playlistId);
+  const nativeTrackId = parseNativeTrackId(trackId);
+  return toAppPlaylist(await invoke<NativePlaylistRecord>('native_add_track_to_playlist', {
+    playlistId: nativePlaylistId,
+    trackId: nativeTrackId,
+  }));
+}
+
+export async function getNativeLyrics(trackId: string): Promise<string | null> {
+  requireNativeRuntime();
+  const nativeTrackId = parseNativeTrackId(trackId);
+  return invoke<string | null>('native_get_lyrics', { trackId: nativeTrackId });
+}
+
+export async function saveNativeLyrics(trackId: string, lrcText: string): Promise<void> {
+  requireNativeRuntime();
+  const nativeTrackId = parseNativeTrackId(trackId);
+  await invoke('native_save_lyrics', { trackId: nativeTrackId, lrcText });
+}
+
+export function toAppPlaylist(playlist: NativePlaylistRecord): Playlist {
+  const trackIds = playlist.trackIds.map((id) => `native-${id}`);
+  return {
+    id: `native-playlist-${playlist.id}`,
+    title: playlist.name,
+    trackCount: trackIds.length,
+    trackIds,
+    subtitle: `${trackIds.length} lagu`,
+    isDropZone: false,
+  };
+}
+
+function requireNativeRuntime(): void {
+  if (!isTauri()) throw new Error('Operasi ini hanya tersedia di aplikasi native.');
+}
+
+function parseNativePlaylistId(id: string): number {
+  const match = /^native-playlist-(\\d+)$/.exec(id);
+  const parsed = match ? Number(match[1]) : NaN;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error('ID playlist native tidak valid.');
+  return parsed;
+}
+
+function parseNativeTrackId(id: string): number {
+  const match = /^native-(\\d+)$/.exec(id);
+  const parsed = match ? Number(match[1]) : NaN;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error('ID track native tidak valid.');
+  return parsed;
 }
 
 /** Returns null in a normal browser preview. */
