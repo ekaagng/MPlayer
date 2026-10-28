@@ -61,13 +61,9 @@ export async function getNativeEqualizer(): Promise<NativeEqualizerSettings> {
 
 export async function saveNativeEqualizer(settings: EqualizerState): Promise<void> {
   if (!isTauri()) return;
-  const positiveBoost = settings.autoPreamp
-    ? Math.max(0, ...Object.values(settings.bands))
-    : 0;
-  const preampDb = Math.max(-12, Math.min(12, settings.preamp - positiveBoost));
   await invoke<NativeEqualizerSettings>('native_set_equalizer', {
     enabled: settings.enabled,
-    preampDb,
+    preampDb: settings.preamp,
     autoPreamp: settings.autoPreamp,
     bandsDb: EQ_FREQUENCY_KEYS.map((frequency) => settings.bands[frequency]),
   });
