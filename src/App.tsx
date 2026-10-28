@@ -180,7 +180,7 @@ export default function App() {
         )}
 
         {currentView === 'equalizer-and-dsp' && (
-          <EqualizerView eqState={eqState} onUpdateEq={handleUpdateEq} />
+          <EqualizerView eqState={eqState} onUpdateEq={handleUpdateEq} isNativeRuntime={isNativeRuntime} />
         )}
 
         {currentView === 'lyrics-editor' && (
