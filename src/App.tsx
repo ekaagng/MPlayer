@@ -121,11 +121,19 @@ export default function App() {
 
   const handleNativeTracksChange = useCallback((tracks: Track[]) => {
     setNativeTracks(tracks);
-    setCurrentTrack((current) => {
-      if (!current?.id.startsWith('native-')) return current;
-      return tracks.find((track) => track.id === current.id) ?? null;
-    });
   }, []);
+
+  useEffect(() => {
+    if (!isNativeRuntime || !currentTrack?.id.startsWith('native-')) return;
+    const stillIndexed = nativeTracks.some((track) => track.id === currentTrack.id);
+    if (!stillIndexed) {
+      audioEngine.stop();
+      setCurrentTrack(null);
+      setIsPlaying(false);
+      setCurrentTimeMs(0);
+      setCurrentDurationMs(0);
+    }
+  }, [isNativeRuntime, currentTrack, nativeTracks]);
 
   const handlePrevTrack = () => {
     const tracks = getActiveTrackList();
