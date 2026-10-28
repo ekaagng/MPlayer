@@ -14,6 +14,7 @@ import { OutputSettingsView } from './views/OutputSettingsView';
 export default function App() {
   const [currentView, setCurrentView] = useState<AppView>('now-playing-and-signal-path');
   const [currentTrack, setCurrentTrack] = useState<Track | null>(() => isTauri() ? null : (MOCK_TRACKS[1] ?? null));
+  const [nativeTracks, setNativeTracks] = useState<Track[]>([]);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
   const [currentDurationMs, setCurrentDurationMs] = useState(0);
@@ -64,7 +65,9 @@ export default function App() {
       if (runtime) {
         const files = await listNativeTracks();
         if (!mounted) return;
-        setCurrentTrack(files.length > 0 ? toAppTrack(files[0], 0) : null);
+        const tracks = files.map((file, index) => toAppTrack(file, index));
+        setNativeTracks(tracks);
+        setCurrentTrack(tracks[0] ?? null);
       }
     }).catch((error: unknown) => {
       console.error('[MPlayer] Native runtime initialization failed:', error);
@@ -114,18 +117,30 @@ export default function App() {
     }
   };
 
+  const getActiveTrackList = () => isNativeRuntime ? nativeTracks : MOCK_TRACKS;
+
+  const handleNativeTracksChange = useCallback((tracks: Track[]) => {
+    setNativeTracks(tracks);
+    setCurrentTrack((current) => {
+      if (!current?.id.startsWith('native-')) return current;
+      return tracks.find((track) => track.id === current.id) ?? null;
+    });
+  }, []);
+
   const handlePrevTrack = () => {
-    if (MOCK_TRACKS.length === 0 || !currentTrack) return;
-    const currentIndex = MOCK_TRACKS.findIndex((track) => track.id === currentTrack.id);
-    const previousIndex = currentIndex > 0 ? currentIndex - 1 : MOCK_TRACKS.length - 1;
-    void handlePlayTrack(MOCK_TRACKS[previousIndex]);
+    const tracks = getActiveTrackList();
+    if (tracks.length === 0 || !currentTrack) return;
+    const currentIndex = tracks.findIndex((track) => track.id === currentTrack.id);
+    const previousIndex = currentIndex < 0 ? tracks.length - 1 : (currentIndex > 0 ? currentIndex - 1 : tracks.length - 1);
+    void handlePlayTrack(tracks[previousIndex]);
   };
 
   const handleNextTrack = () => {
-    if (MOCK_TRACKS.length === 0 || !currentTrack) return;
-    const currentIndex = MOCK_TRACKS.findIndex((track) => track.id === currentTrack.id);
-    const nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % MOCK_TRACKS.length;
-    void handlePlayTrack(MOCK_TRACKS[nextIndex]);
+    const tracks = getActiveTrackList();
+    if (tracks.length === 0 || !currentTrack) return;
+    const currentIndex = tracks.findIndex((track) => track.id === currentTrack.id);
+    const nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % tracks.length;
+    void handlePlayTrack(tracks[nextIndex]);
   };
 
   const handleSeek = (milliseconds: number) => {
@@ -161,6 +176,7 @@ export default function App() {
             currentTrack={currentTrack}
             isPlaying={isPlaying}
             onPlayTrack={(track) => { void handlePlayTrack(track); }}
+            onNativeTracksChange={handleNativeTracksChange}
           />
         )}
 
@@ -171,7 +187,7 @@ export default function App() {
             currentTimeMs={currentTimeMs}
             durationMs={currentDurationMs}
             isNativeRuntime={isNativeRuntime}
-            canNavigate={!isNativeRuntime || !currentTrack?.id.startsWith('native-')}
+            canNavigate={!isNativeRuntime || nativeTracks.length > 1}
             playbackError={playbackError}
             onTogglePlay={handleTogglePlay}
             onPrev={handlePrevTrack}
