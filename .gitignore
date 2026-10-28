@@ -1,7 +1,15 @@
 node_modules/
+src-tauri/target/
+src-tauri/gen/
+src-tauri/icons/
+
 build/
 dist/
 coverage/
+android/.gradle/
+android/app/build/
+ios/Pods/
+
 .DS_Store
 *.log
 .env*
