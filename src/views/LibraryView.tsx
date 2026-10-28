@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { isTauri } from '@tauri-apps/api/core';
 import { Track, Playlist } from '../types/audio';
 import { MOCK_TRACKS, INITIAL_PLAYLISTS } from '../data/mockTracks';
 import { getNativeRuntimeInfo, listNativeTracks, scanNativeMusicFolder, toAppTrack } from '../services/nativeBridge';
@@ -15,7 +16,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   onPlayTrack,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
-  const [isNativeRuntime, setIsNativeRuntime] = useState(false);
+  const [isNativeRuntime, setIsNativeRuntime] = useState(() => isTauri());
   const [nativeTracks, setNativeTracks] = useState<Track[]>([]);
   const [activeFormatFilter, setActiveFormatFilter] = useState<string>('ALL');
   const [playlists, setPlaylists] = useState<Playlist[]>(() => {
