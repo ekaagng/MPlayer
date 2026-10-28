@@ -4,7 +4,7 @@ export interface Track {
   title: string;
   artist: string;
   album: string;
-  format: 'FLAC' | 'WAV' | 'DSD' | 'MP3' | 'MQA';
+  format: 'FLAC' | 'WAV' | 'DSD' | 'MP3' | 'MQA' | 'AAC' | 'ALAC' | 'OGG' | 'OPUS' | 'AIFF' | 'M4A' | 'UNKNOWN';
   sampleRate: string; // e.g. "192kHz", "96kHz", "5.6MHz", "44.1kHz"
   sampleRateNum: number; // e.g. 192000
   bitDepth: string; // e.g. "24-bit", "32-bit", "1-bit"
