@@ -82,3 +82,20 @@ test('serializeLrc generates compliant text output', () => {
   assert.ok(output.includes('[ti:Autumn Leaves]'));
   assert.ok(output.includes('[00:24.12] First line'));
 });
+
+test('parseLrc expands repeated timestamps and keeps plain text as unsynchronized lyrics', () => {
+  const lines = parseLrc('[00:10.1][00:12.25]Repeat\nPlain lyric line\n[00:61.00]Invalid timestamp');
+  assert.equal(lines.length, 4);
+  assert.equal(lines[0].timeMs, 10100);
+  assert.equal(lines[1].timeMs, 12250);
+  assert.equal(lines[0].text, 'Repeat');
+  assert.equal(lines[1].text, 'Repeat');
+  assert.equal(lines[2].text, 'Plain lyric line');
+  assert.equal(lines[2].synced, false);
+  assert.equal(lines[3].synced, false);
+});
+
+test('parseTimestamp rejects seconds outside 00-59', () => {
+  assert.equal(parseTimestamp('[00:60.00]'), null);
+  assert.equal(parseTimestamp('[00:59.999]'), 59999);
+});
