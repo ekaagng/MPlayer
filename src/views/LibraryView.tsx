@@ -401,7 +401,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 className="w-full py-2 px-2.5 bg-surface-container hover:bg-surface-container-high text-on-surface font-headline text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors border border-outline cursor-pointer mt-1"
               >
                 <span className="material-symbols-outlined text-[16px]">add</span>
-                <span onClick={() => { setPlaylistEditor(null); setPlaylistName(''); }}>+ Buat Playlist Baru</span>
+                <span>+ Buat Playlist Baru</span>
               </button>
             </div>
           </div>
