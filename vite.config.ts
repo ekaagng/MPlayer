@@ -6,7 +6,7 @@ import {defineConfig} from 'vite';
 export default defineConfig(() => {
   return {
     // GitHub Pages serves this project under /MPlayer/; keep local dev at root.
-    base: process.env.GITHUB_ACTIONS === 'true' ? '/MPlayer/' : '/',
+    base: process.env.GITHUB_ACTIONS === 'true' ? '/MPlayer/' : './',
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
