@@ -56,7 +56,7 @@ export default function App() {
     let mounted = true;
     const unsubscribeTelemetry = audioEngine.subscribeTelemetry((telemetry) => {
       setCurrentDurationMs(telemetry.durationMs);
-      if (audioEngine.isCurrentlyPlaying()) setCurrentTimeMs(telemetry.currentTimeMs);
+      setCurrentTimeMs(telemetry.currentTimeMs);
     });
     const unsubscribeEnd = audioEngine.subscribeTrackEnd(() => setIsPlaying(false));
 
