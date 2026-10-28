@@ -57,7 +57,7 @@ export const OutputSettingsView: React.FC<OutputSettingsViewProps> = ({
   const handleExportLog = () => {
     const logContent = [
       '====================================================',
-      'RESONANCE CORE - AUDIO ENGINE DIAGNOSTIC REPORT',
+      'MPLAYER - AUDIO ENGINE DIAGNOSTIC REPORT',
       '====================================================',
       `Waktu: ${new Date().toISOString()}`,
       `Engine: ${isNativeRuntime ? 'Rodio/CPAL native playback through default OS output' : 'Browser Web Audio preview'}`, 
@@ -140,7 +140,7 @@ export const OutputSettingsView: React.FC<OutputSettingsViewProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
           <div
             aria-disabled="true"
-            className={`p-4 border-2 cursor-pointer transition-all shadow-[2px_2px_0px_#1a1a1a] flex flex-col justify-between ${
+            className={`p-4 border-2 cursor-not-allowed opacity-65 transition-all shadow-[2px_2px_0px_#1a1a1a] flex flex-col justify-between ${
               settings.wasapiMode === 'exclusive'
                 ? 'bg-primary-container border-outline text-on-primary-container'
                 : 'bg-surface border-outline/30 text-on-surface hover:bg-surface-container'
@@ -182,7 +182,7 @@ export const OutputSettingsView: React.FC<OutputSettingsViewProps> = ({
               )}
             </div>
             <p className="text-[11px] font-body opacity-90 leading-relaxed">
-              Opsi target untuk implementasi native. Mode ini belum mengubah jalur audio pada preview web.
+              Belum terhubung ke backend. Output eksklusif memerlukan implementasi API khusus platform.
             </p>
           </div>
         </div>
@@ -268,7 +268,7 @@ export const OutputSettingsView: React.FC<OutputSettingsViewProps> = ({
           <div className="bg-surface-bright p-5 border-2 border-outline shadow-sm flex flex-col gap-3">
             <div className="flex items-center justify-between pb-2 border-b border-outline/20">
               <span className="font-headline font-bold text-xs uppercase tracking-wider text-on-surface">
-                Uji Sinyal &amp; Audit Passthrough DAC
+                Status Jalur Audio &amp; Audit Output
               </span>
               <span className="text-[10px] font-mono text-tertiary font-bold">{spikePatternState}</span>
             </div>
@@ -289,7 +289,7 @@ export const OutputSettingsView: React.FC<OutputSettingsViewProps> = ({
                 disabled={spikeTesting}
                 className="flex min-h-11 items-center justify-center rounded-lg bg-primary px-4 py-2 text-center text-xs font-bold uppercase text-white transition-colors hover:bg-tertiary disabled:opacity-50 sm:flex-none"
               >
-                Periksa Status Audit DAC
+                Periksa Status Jalur Audio
               </button>
               <button
                 onClick={handleExportLog}
