@@ -719,24 +719,18 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               <label className="text-[10px] font-label font-bold uppercase text-on-surface-variant">Status folder musik</label>
               <input
                 type="text"
-                defaultValue="D:\Music\Lossless_Masters_2024"
-                className="w-full bg-surface-container px-3 py-2 text-xs font-mono border-2 border-outline focus:outline-none focus:bg-primary-container"
+                value="Pemindaian folder native belum tersedia"
+                readOnly
+                className="w-full min-w-0 bg-surface-container px-3 py-2 text-xs font-mono border border-outline/15 text-on-surface-variant"
               />
             </div>
-            <div className="flex justify-end gap-2 pt-2">
+            <div className="flex justify-end pt-2">
               <button
+                type="button"
                 onClick={() => setShowAddFolderModal(false)}
-                className="px-4 py-2 bg-surface-container text-on-surface font-headline font-bold text-xs uppercase border border-outline cursor-pointer"
+                className="min-h-10 rounded-lg bg-primary px-4 py-2 text-xs font-bold uppercase text-on-primary"
               >
-                Batal
-              </button>
-              <button
-                onClick={() => {
-                  setShowAddFolderModal(false);
-                }}
-                className="px-4 py-2 bg-primary text-on-primary font-headline font-bold text-xs uppercase hover:bg-primary-container hover:text-on-primary-container transition-colors cursor-pointer border border-outline"
-              >
-                Mulai Indeks
+                Tutup Preview
               </button>
             </div>
           </div>
