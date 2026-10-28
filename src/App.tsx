@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { isTauri } from '@tauri-apps/api/core';
 import { AppView, Track, EqualizerState, OutputSettings } from './types/audio';
 import { MOCK_TRACKS } from './data/mockTracks';
 import { audioEngine } from './services/audioEngine';
@@ -12,11 +13,11 @@ import { OutputSettingsView } from './views/OutputSettingsView';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<AppView>('now-playing-and-signal-path');
-  const [currentTrack, setCurrentTrack] = useState<Track | null>(MOCK_TRACKS[1] ?? null);
+  const [currentTrack, setCurrentTrack] = useState<Track | null>(() => isTauri() ? null : (MOCK_TRACKS[1] ?? null));
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
   const [currentDurationMs, setCurrentDurationMs] = useState(0);
-  const [isNativeRuntime, setIsNativeRuntime] = useState(false);
+  const [isNativeRuntime, setIsNativeRuntime] = useState(() => isTauri());
   const [playbackError, setPlaybackError] = useState<string | null>(null);
 
   const [eqState, setEqState] = useState<EqualizerState>({
