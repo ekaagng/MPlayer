@@ -1,0 +1,32 @@
+name: Validate MPlayer preview
+
+on:
+  push:
+    branches:
+      - main
+      - fix/p0-foundation
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install
+      - name: Test LRC parser
+        run: npm run test:lrc
+      - name: Type-check
+        run: npm run lint
+      - name: Build production bundle
+        run: npm run build
