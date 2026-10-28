@@ -5,7 +5,7 @@ use std::{
     fs::{self, File},
     path::{Path, PathBuf},
     sync::Mutex,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, UNIX_EPOCH},
 };
 use tauri::{Manager, State};
 
@@ -378,8 +378,9 @@ fn snapshot_from_playback(playback: &NativePlayback) -> PlaybackSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use super::{supported_audio_file, AUDIO_EXTENSIONS};
-    use std::path::Path;
+    use super::{initialize_database, list_tracks_from_db, supported_audio_file, AUDIO_EXTENSIONS};
+    use rusqlite::Connection;
+    use std::{fs, path::Path, time::{SystemTime, UNIX_EPOCH}};
 
     #[test]
     fn accepts_supported_extensions_case_insensitively() {
@@ -398,6 +399,41 @@ mod tests {
     #[test]
     fn supported_extensions_are_nonempty() {
         assert!(AUDIO_EXTENSIONS.len() >= 3);
+    }
+
+    #[test]
+    fn initializes_sqlite_schema_and_reads_indexed_tracks() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after Unix epoch")
+            .as_nanos();
+        let test_dir = std::env::temp_dir().join(format!("mplayer-test-{}-{nonce}", std::process::id()));
+        fs::create_dir_all(&test_dir).expect("test directory should be created");
+        let database_path = test_dir.join("library.sqlite3");
+
+        initialize_database(&database_path).expect("schema should be initialized");
+        let connection = Connection::open(&database_path).expect("test database should open");
+        let table_count: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN
+             ('tracks', 'playlists', 'playlist_tracks', 'playback_history', 'lyrics', 'settings')",
+            [],
+            |row| row.get(0),
+        ).expect("schema count query should succeed");
+        assert_eq!(table_count, 6);
+
+        connection.execute(
+            "INSERT INTO tracks (path, title, format, size_bytes, modified_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params!["/music/test.flac", "test", "FLAC", 4096_i64, Option::<i64>::None],
+        ).expect("track should be indexed");
+        let tracks = list_tracks_from_db(&connection).expect("indexed tracks should be readable");
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].title, "test");
+        assert_eq!(tracks[0].format, "FLAC");
+        assert_eq!(tracks[0].size_bytes, 4096);
+
+        drop(connection);
+        fs::remove_dir_all(&test_dir).expect("test directory should be removed");
     }
 }
 
