@@ -169,7 +169,7 @@ export default function App() {
   };
 
   const handleNextTrack = () => {
-    const tracks = getActiveTrackList();
+    const tracks = playQueue;
     if (tracks.length === 0 || !currentTrack) return;
     const currentIndex = tracks.findIndex((track) => track.id === currentTrack.id);
     const nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % tracks.length;
