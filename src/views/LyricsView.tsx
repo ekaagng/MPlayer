@@ -365,7 +365,7 @@ export const LyricsView: React.FC<LyricsViewProps> = ({
           {/* Quick Tag Button */}
           <button
             disabled={!currentTrack || activeLineIndex < 0}
-            onClick={handleTagActiveLine}
+            onClick={() => handleTagActiveLine()}
             className="w-full py-3 bg-primary text-white hover:bg-primary-container hover:text-primary border-2 border-outline font-headline font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-[2px_2px_0px_#1a1a1a] cursor-pointer"
           >
             <span className="material-symbols-outlined text-lg">alarm_add</span>
