@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { LRCLine, Track } from '../types/audio';
-import { INITIAL_LYRICS } from '../data/mockTracks';
 import { formatTimestamp, serializeLrc, parseLrc, shiftTimestamps } from '../utils/lrcParser';
 
 interface LyricsViewProps {
@@ -22,6 +21,7 @@ export const LyricsView: React.FC<LyricsViewProps> = ({
   const [dbSaved, setDbSaved] = useState(false);
   const [regexFind, setRegexFind] = useState('');
   const [regexReplace, setRegexReplace] = useState('');
+  const [newLyricText, setNewLyricText] = useState('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -74,23 +74,41 @@ export const LyricsView: React.FC<LyricsViewProps> = ({
     setActiveLineIndex(matchIndex >= 0 ? matchIndex : 0);
   }, [currentTimeMs, lyricsLines]);
 
-  const handleTagActiveLine = () => {
-    if (!currentTrack || activeLineIndex < 0 || !lyricsLines[activeLineIndex]) {
+  const handleTagActiveLine = (lineIndex = activeLineIndex) => {
+    if (!currentTrack || lineIndex < 0 || !lyricsLines[lineIndex]) {
       setStatusMessage('Pilih lagu dan baris lirik terlebih dahulu.');
       return;
     }
     const currentMs = Math.max(0, Math.round(currentTimeMs));
-    const updated = [...lyricsLines];
-    if (updated[activeLineIndex]) {
-      updated[activeLineIndex] = {
-        ...updated[activeLineIndex],
-        timeMs: currentMs,
-        timeFormatted: formatTimestamp(currentMs),
-        synced: true,
-      };
-      setLyricsLines(updated);
-      setStatusMessage(`Waktu ${formatTimestamp(currentMs)} dicatat untuk Baris ${activeLineIndex + 1}.`);
+    setLyricsLines((prev) => prev.map((line, index) => index === lineIndex
+      ? { ...line, timeMs: currentMs, timeFormatted: formatTimestamp(currentMs), synced: true }
+      : line
+    ));
+    setDbSaved(false);
+    setStatusMessage(`Waktu ${formatTimestamp(currentMs)} dicatat untuk Baris ${lineIndex + 1}. Simpan lirik untuk mempertahankan perubahan.`);
+  };
+
+  const handleAddLyricLine = () => {
+    const text = newLyricText.trim();
+    if (!currentTrack) {
+      setStatusMessage('Pilih lagu sebelum menambahkan lirik.');
+      return;
     }
+    if (!text) {
+      setStatusMessage('Tulis teks lirik terlebih dahulu.');
+      return;
+    }
+    setLyricsLines((prev) => [...prev, {
+      id: `manual-${Date.now()}`,
+      timeMs: 0,
+      timeFormatted: '[--:--.--]',
+      text,
+      isInstrumental: /instrumental|solo/i.test(text),
+      synced: false,
+    }]);
+    setNewLyricText('');
+    setDbSaved(false);
+    setStatusMessage('Baris lirik ditambahkan tanpa timestamp. Gunakan Tag pada baris tersebut saat audio mencapai waktunya.');
   };
 
   const handleShiftOffset = (deltaMs: number) => {
@@ -260,7 +278,10 @@ export const LyricsView: React.FC<LyricsViewProps> = ({
                       </span>
                     </div>
                   </div>
-                  <span className="w-2.5 h-2.5 rounded-full bg-secondary animate-ping shrink-0"></span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-[10px] font-mono">{line.timeFormatted}</span>
+                    {showEditorMode && <button type="button" onClick={(event) => { event.stopPropagation(); handleTagActiveLine(idx); }} className="px-2 py-1 bg-secondary text-on-secondary text-[10px] font-bold uppercase border border-outline">Tag</button>}
+                  </div>
                 </div>
               );
             }
@@ -283,9 +304,12 @@ export const LyricsView: React.FC<LyricsViewProps> = ({
                     {line.text}
                   </p>
                 </div>
-                <span className="text-[10px] font-mono text-on-surface-variant shrink-0">
-                  {line.synced ? line.timeFormatted : '--:--'}
-                </span>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-[10px] font-mono text-on-surface-variant">
+                    {line.synced ? line.timeFormatted : '--:--'}
+                  </span>
+                  {showEditorMode && <button type="button" onClick={(event) => { event.stopPropagation(); handleTagActiveLine(idx); }} className="px-2 py-1 bg-surface-container border border-outline text-[10px] font-bold uppercase">Tag</button>}
+                </div>
               </div>
             );
           })}
@@ -324,9 +348,15 @@ export const LyricsView: React.FC<LyricsViewProps> = ({
                   dbSaved ? 'bg-tertiary text-white' : 'bg-primary-container text-on-primary-container'
                 }`}
               >
-                {dbSaved ? 'Tersimpan!' : 'Simpan ke SQLite'}
+                {dbSaved ? 'Tersimpan!' : 'Simpan lirik'}
               </button>
             </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-2">
+            <label htmlFor="new-lyric-text" className="sr-only">Teks baris lirik baru</label>
+            <input id="new-lyric-text" value={newLyricText} onChange={(event) => setNewLyricText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') handleAddLyricLine(); }} placeholder="Tulis baris lirik baru..." className="flex-1 bg-surface-bright px-3 py-2 text-sm border border-outline" />
+            <button type="button" onClick={handleAddLyricLine} className="px-3 py-2 bg-surface-bright border border-outline text-xs font-bold uppercase">Tambah baris</button>
           </div>
 
           {/* Quick Tag Button */}
