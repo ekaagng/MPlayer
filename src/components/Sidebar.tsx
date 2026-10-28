@@ -12,7 +12,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   currentView,
   onSelectView,
   isPlaying,
-  trackCount = 18420,
+  trackCount = 0,
 }) => {
   const navItems: { id: AppView; label: string; icon: string }[] = [
     { id: 'library-and-tracks', label: 'Library & Tracks', icon: 'audio_file' },
@@ -66,7 +66,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </span>
         </div>
         <div className="text-[11px] font-mono font-semibold text-on-surface tracking-tight border border-outline bg-surface-bright p-1.5 shadow-[2px_2px_0px_#1a1a1a]">
-          {trackCount.toLocaleString()} tracks indexed • SQLite OK
+          {trackCount.toLocaleString()} demo tracks • native database not connected
         </div>
       </div>
     </aside>
