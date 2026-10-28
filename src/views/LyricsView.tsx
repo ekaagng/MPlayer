@@ -15,8 +15,8 @@ export const LyricsView: React.FC<LyricsViewProps> = ({
   currentTimeMs,
   onSeek,
 }) => {
-  const [lyricsLines, setLyricsLines] = useState<LRCLine[]>(INITIAL_LYRICS);
-  const [activeLineIndex, setActiveLineIndex] = useState<number>(4);
+  const [lyricsLines, setLyricsLines] = useState<LRCLine[]>([]);
+  const [activeLineIndex, setActiveLineIndex] = useState<number>(-1);
   const [showEditorMode, setShowEditorMode] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<string>('Lirik tersinkronisasi otomatis dengan audio.');
   const [dbSaved, setDbSaved] = useState(false);
@@ -25,23 +25,61 @@ export const LyricsView: React.FC<LyricsViewProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const syncedCount = lyricsLines.filter((l) => l.synced).length;
-  const syncPercentage = Math.round((syncedCount / lyricsLines.length) * 100);
+  const syncedCount = lyricsLines.filter((line) => line.synced).length;
+  const syncPercentage = lyricsLines.length === 0 ? 0 : Math.round((syncedCount / lyricsLines.length) * 100);
+  const currentTrackId = currentTrack?.id ?? null;
 
-  // Auto-track active lyric line based on currentTimeMs
+  // Load lyrics per track; browser preview storage is not the native SQLite database.
   useEffect(() => {
-    if (currentTimeMs > 0) {
-      for (let i = lyricsLines.length - 1; i >= 0; i--) {
-        if (lyricsLines[i].synced && currentTimeMs >= lyricsLines[i].timeMs) {
-          setActiveLineIndex(i);
-          break;
-        }
+    if (!currentTrackId || !currentTrack) {
+      setLyricsLines([]);
+      setActiveLineIndex(-1);
+      setStatusMessage('Pilih lagu untuk menambahkan atau menyinkronkan lirik.');
+      return;
+    }
+    let loadedLines: LRCLine[] = currentTrack.lrcLines ?? [];
+    try {
+      const stored = window.localStorage.getItem(`mplayer:lyrics:${currentTrackId}`);
+      if (stored) {
+        const parsed = JSON.parse(stored) as LRCLine[];
+        if (Array.isArray(parsed) && parsed.every((line) =>
+          typeof line.id === 'string' && typeof line.text === 'string' &&
+          typeof line.timeMs === 'number' && typeof line.synced === 'boolean'
+        )) loadedLines = parsed;
+      }
+    } catch {
+      setStatusMessage('Lirik tersimpan tidak dapat dibaca; memuat lirik dari metadata lagu.');
+    }
+    setLyricsLines(loadedLines.map((line) => ({
+      ...line,
+      timeFormatted: line.synced ? formatTimestamp(line.timeMs) : '[--:--.--]',
+    })));
+    setActiveLineIndex(loadedLines.length > 0 ? 0 : -1);
+    setStatusMessage(loadedLines.length > 0 ? 'Lirik lagu dimuat.' : 'Belum ada lirik untuk lagu ini. Impor file .LRC atau tambahkan lirik.');
+  }, [currentTrackId]);
+
+  // Keep the highlighted line tied to the current playback position.
+  useEffect(() => {
+    if (lyricsLines.length === 0) {
+      setActiveLineIndex(-1);
+      return;
+    }
+    let matchIndex = -1;
+    for (let i = lyricsLines.length - 1; i >= 0; i--) {
+      if (lyricsLines[i].synced && currentTimeMs >= lyricsLines[i].timeMs) {
+        matchIndex = i;
+        break;
       }
     }
+    setActiveLineIndex(matchIndex >= 0 ? matchIndex : 0);
   }, [currentTimeMs, lyricsLines]);
 
   const handleTagActiveLine = () => {
-    const currentMs = Math.round(currentTimeMs || 54600);
+    if (!currentTrack || activeLineIndex < 0 || !lyricsLines[activeLineIndex]) {
+      setStatusMessage('Pilih lagu dan baris lirik terlebih dahulu.');
+      return;
+    }
+    const currentMs = Math.max(0, Math.round(currentTimeMs));
     const updated = [...lyricsLines];
     if (updated[activeLineIndex]) {
       updated[activeLineIndex] = {
@@ -52,9 +90,6 @@ export const LyricsView: React.FC<LyricsViewProps> = ({
       };
       setLyricsLines(updated);
       setStatusMessage(`Waktu ${formatTimestamp(currentMs)} dicatat untuk Baris ${activeLineIndex + 1}.`);
-      if (activeLineIndex < updated.length - 1) {
-        setActiveLineIndex(activeLineIndex + 1);
-      }
     }
   };
 
@@ -64,9 +99,19 @@ export const LyricsView: React.FC<LyricsViewProps> = ({
   };
 
   const handleCommitToDb = () => {
-    setDbSaved(true);
-    setStatusMessage('Lirik berhasil disimpan ke SQLite (~/.resonance/lyrics.db).');
-    setTimeout(() => setDbSaved(false), 2500);
+    if (!currentTrack) {
+      setStatusMessage('Pilih lagu sebelum menyimpan lirik.');
+      return;
+    }
+    try {
+      window.localStorage.setItem(`mplayer:lyrics:${currentTrack.id}`, JSON.stringify(lyricsLines));
+      setDbSaved(true);
+      setStatusMessage('Lirik tersimpan di penyimpanan browser lokal. Ini belum tersimpan ke SQLite native.');
+      setTimeout(() => setDbSaved(false), 2500);
+    } catch {
+      setDbSaved(false);
+      setStatusMessage('Gagal menyimpan lirik ke penyimpanan browser. Periksa ruang penyimpanan.');
+    }
   };
 
   const handleExportLrc = () => {
@@ -96,16 +141,19 @@ export const LyricsView: React.FC<LyricsViewProps> = ({
     if (!file) return;
     const reader = new FileReader();
     reader.onload = (event) => {
-      const content = event.target?.result as string;
-      if (content) {
-        const parsed = parseLrc(content);
-        if (parsed.length > 0) {
-          setLyricsLines(parsed);
-          setActiveLineIndex(0);
-          setStatusMessage(`Berhasil memuat ${parsed.length} baris lirik dari ${file.name}.`);
-        }
+      const content = typeof event.target?.result === 'string' ? event.target.result : '';
+      const parsed = parseLrc(content);
+      if (parsed.length === 0) {
+        setStatusMessage(`Tidak ada baris lirik yang dapat dibaca dari ${file.name}. Periksa format file.`);
+        return;
       }
+      setLyricsLines(parsed);
+      setActiveLineIndex(0);
+      setDbSaved(false);
+      setStatusMessage(`Memuat ${parsed.length} baris dari ${file.name}. Tekan Simpan untuk menyimpannya pada lagu ini.`);
     };
+    reader.onerror = () => setStatusMessage(`Gagal membaca file ${file.name}.`);
+    reader.onloadend = () => { if (fileInputRef.current) fileInputRef.current.value = ''; };
     reader.readAsText(file);
   };
 
@@ -144,14 +192,14 @@ export const LyricsView: React.FC<LyricsViewProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <span className="font-headline font-bold text-sm text-on-surface uppercase">
-                {currentTrack?.title || 'Autumn Leaves'}
+                {currentTrack?.title || 'Belum ada lagu dipilih'}
               </span>
               <span className="text-[10px] font-mono font-bold bg-primary-container px-1.5 py-0.2 border border-outline">
                 {syncPercentage}% Sinkron
               </span>
             </div>
             <p className="text-xs font-body text-on-surface-variant">
-              {currentTrack?.artist || 'Bill Evans Trio'} • {statusMessage}
+              {currentTrack?.artist || '—'} • {statusMessage}
             </p>
           </div>
         </div>
@@ -283,6 +331,7 @@ export const LyricsView: React.FC<LyricsViewProps> = ({
 
           {/* Quick Tag Button */}
           <button
+            disabled={!currentTrack || activeLineIndex < 0}
             onClick={handleTagActiveLine}
             className="w-full py-3 bg-primary text-white hover:bg-primary-container hover:text-primary border-2 border-outline font-headline font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-[2px_2px_0px_#1a1a1a] cursor-pointer"
           >
