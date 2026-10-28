@@ -1073,7 +1073,7 @@ fn native_pause(state: State<'_, AppState>) -> Result<(), String> {
     if let Some(sink) = &playback.sink {
         sink.pause();
     }
-    persist_current_playback_position(&playback, &database_path)
+    persist_current_playback_position(&playback, &database_path, None)
 }
 
 #[tauri::command]
@@ -1092,7 +1092,7 @@ fn native_seek(position_ms: u64, state: State<'_, AppState>) -> Result<(), Strin
     let sink = playback.sink.as_ref().ok_or("Belum ada track yang diputar.")?;
     sink.try_seek(Duration::from_millis(position_ms))
         .map_err(|error| format!("Seek gagal: {error}"))?;
-    persist_current_playback_position(&playback, &database_path)
+    persist_current_playback_position(&playback, &database_path, None)
 }
 
 #[tauri::command]
@@ -1112,7 +1112,7 @@ fn native_set_volume(volume: f32, state: State<'_, AppState>) -> Result<(), Stri
 fn native_stop(state: State<'_, AppState>) -> Result<(), String> {
     let database_path = state.database_path.clone();
     let mut playback = state.playback.lock().map_err(|_| "State audio terkunci.".to_string())?;
-    persist_current_playback_position(&playback, &database_path)?;
+    persist_current_playback_position(&playback, &database_path, None)?;
     if let Some(sink) = playback.sink.take() {
         sink.stop();
     }
