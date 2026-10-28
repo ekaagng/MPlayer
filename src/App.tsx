@@ -196,6 +196,7 @@ export default function App() {
           <OutputSettingsView
             settings={outputSettings}
             onUpdateSettings={setOutputSettings}
+            isNativeRuntime={isNativeRuntime}
           />
         )}
       </main>
