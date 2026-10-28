@@ -1,0 +1,557 @@
+import React, { useState, useMemo } from 'react';
+import { Track, Playlist } from '../types/audio';
+import { MOCK_TRACKS, INITIAL_PLAYLISTS } from '../data/mockTracks';
+
+interface LibraryViewProps {
+  currentTrack: Track | null;
+  isPlaying: boolean;
+  onPlayTrack: (track: Track) => void;
+}
+
+export const LibraryView: React.FC<LibraryViewProps> = ({
+  currentTrack,
+  isPlaying,
+  onPlayTrack,
+}) => {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [activeFormatFilter, setActiveFormatFilter] = useState<string>('ALL');
+  const [playlists, setPlaylists] = useState<Playlist[]>(INITIAL_PLAYLISTS);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncToast, setSyncToast] = useState<string | null>(null);
+  const [swipedItemRestored, setSwipedItemRestored] = useState(false);
+  const [showAddFolderModal, setShowAddFolderModal] = useState(false);
+  const [showChecksumModal, setShowChecksumModal] = useState(false);
+  const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
+
+  const filterChips = [
+    { id: 'ALL', label: 'Semua Lagu (18,420)' },
+    { id: 'FLAC', label: 'FLAC Lossless' },
+    { id: 'WAV', label: 'WAV Raw' },
+    { id: 'HI-RES', label: 'Hi-Res >96kHz' },
+    { id: 'DSD', label: 'DSD / DFF 5.6M' },
+    { id: 'MP3', label: 'MP3 320k' },
+  ];
+
+  const filteredTracks = useMemo(() => {
+    return MOCK_TRACKS.filter((track) => {
+      if (activeFormatFilter === 'FLAC' && track.format !== 'FLAC') return false;
+      if (activeFormatFilter === 'WAV' && track.format !== 'WAV') return false;
+      if (activeFormatFilter === 'DSD' && track.format !== 'DSD') return false;
+      if (activeFormatFilter === 'HI-RES' && !track.sampleRate.includes('192') && !track.sampleRate.includes('5.6M')) return false;
+
+      if (!searchQuery.trim()) return true;
+      const q = searchQuery.toLowerCase();
+      return (
+        track.title.toLowerCase().includes(q) ||
+        track.artist.toLowerCase().includes(q) ||
+        track.album.toLowerCase().includes(q) ||
+        track.format.toLowerCase().includes(q)
+      );
+    });
+  }, [searchQuery, activeFormatFilter]);
+
+  const handleSync = () => {
+    setIsSyncing(true);
+    setTimeout(() => {
+      setIsSyncing(false);
+      setSyncToast('Sinkronisasi selesai: 18.420 lagu siap diputar.');
+      setTimeout(() => setSyncToast(null), 3000);
+    }, 600);
+  };
+
+  const handleAddToPlaylist = (playlistId: string) => {
+    setPlaylists((prev) =>
+      prev.map((p) =>
+        p.id === playlistId ? { ...p, trackCount: p.trackCount + 1 } : p
+      )
+    );
+    setSyncToast('Lagu berhasil ditambahkan ke playlist pilihan!');
+    setTimeout(() => setSyncToast(null), 3000);
+  };
+
+  return (
+    <div className="flex flex-col w-full gap-4 pb-8">
+      {/* Toast Notification */}
+      {syncToast && (
+        <div className="bg-primary text-on-primary p-3 shadow-md flex items-center justify-between font-label text-xs uppercase animate-fade-in border border-outline">
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-primary-container text-base">check_circle</span>
+            <span>{syncToast}</span>
+          </div>
+          <button onClick={() => setSyncToast(null)} className="text-surface-dim hover:text-white cursor-pointer">
+            <span className="material-symbols-outlined text-sm">close</span>
+          </button>
+        </div>
+      )}
+
+      {/* Primary Clean Search & Filter Header */}
+      <div className="flex flex-col gap-3 bg-surface-bright p-4 shadow-sm border-2 border-outline">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          {/* Main Search Input */}
+          <div className="relative flex-1 min-w-[260px] md:min-w-[340px]">
+            <div className="relative flex items-center bg-surface-container-lowest border-2 border-outline shadow-[2px_2px_0px_#1a1a1a]">
+              <span className="material-symbols-outlined absolute left-3 text-on-surface-variant text-[20px]">
+                search
+              </span>
+              <input
+                id="audio-search"
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Cari lagu, musisi, album, atau format..."
+                className="w-full pl-10 pr-24 py-2.5 bg-transparent font-headline text-xs font-semibold text-on-surface placeholder:text-on-surface-variant focus:outline-none"
+              />
+              {searchQuery ? (
+                <button
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-3 text-[10px] font-mono font-bold bg-surface-container px-1.5 py-0.5 border border-outline hover:bg-secondary hover:text-white cursor-pointer"
+                >
+                  CLEAR
+                </button>
+              ) : (
+                <span className="absolute right-3 py-0.5 px-2 bg-surface-container font-mono text-[10px] font-bold text-on-surface-variant uppercase border border-outline/20">
+                  Ctrl+K
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Quick Actions */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleSync}
+              className="flex items-center gap-1.5 px-3 py-2 bg-surface-container hover:bg-surface-container-high text-xs font-label font-bold uppercase text-on-surface border border-outline cursor-pointer transition-colors shadow-[1px_1px_0px_#1a1a1a]"
+              title="Perbarui daftar lagu"
+            >
+              <span className={`material-symbols-outlined text-[16px] text-tertiary ${isSyncing ? 'animate-spin' : ''}`}>
+                sync
+              </span>
+              <span>{isSyncing ? 'Memindai...' : 'Pindai Ulang'}</span>
+            </button>
+
+            <button
+              onClick={() => setShowAddFolderModal(true)}
+              className="flex items-center gap-1.5 px-4 py-2 bg-primary-container text-on-primary-container font-headline text-xs font-bold uppercase tracking-wider hover:bg-primary hover:text-on-primary transition-colors shadow-[2px_2px_0px_#1a1a1a] cursor-pointer border-2 border-outline"
+            >
+              <span className="material-symbols-outlined text-[18px]">create_new_folder</span>
+              <span>Tambah Folder</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Clean Format Filter Chips */}
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-outline/10">
+          <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+            {filterChips.map((chip) => {
+              const active = activeFormatFilter === chip.id;
+              return (
+                <button
+                  key={chip.id}
+                  onClick={() => setActiveFormatFilter(chip.id)}
+                  className={`px-3 py-1 font-label text-xs font-bold uppercase transition-all shadow-[1px_1px_0px_#1a1a1a] border border-outline cursor-pointer ${
+                    active
+                      ? 'bg-primary text-on-primary'
+                      : 'bg-surface-container-high text-on-surface hover:bg-primary-container hover:text-on-primary-container'
+                  }`}
+                >
+                  {chip.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Toggle for Advanced / Optional Details */}
+          <button
+            onClick={() => setShowAdvancedOptions(!showAdvancedOptions)}
+            className="flex items-center gap-1 text-[11px] font-label font-bold uppercase text-on-surface-variant hover:text-primary transition-colors cursor-pointer px-2 py-1 bg-surface-container-low border border-outline/30"
+          >
+            <span className="material-symbols-outlined text-sm text-tertiary">tune</span>
+            <span>{showAdvancedOptions ? 'Sembunyikan Opsi Teknis' : 'Opsi Penyimpanan Lanjutan'}</span>
+            <span className="material-symbols-outlined text-sm">
+              {showAdvancedOptions ? 'expand_less' : 'expand_more'}
+            </span>
+          </button>
+        </div>
+      </div>
+
+      {/* Collapsible Advanced Options: Inode Paths, Sources, Storage & Integrity */}
+      {showAdvancedOptions && (
+        <div className="bg-surface-container-low p-4 border-2 border-outline shadow-md flex flex-col gap-4 animate-fade-in">
+          <div className="flex items-center justify-between pb-2 border-b border-outline/20">
+            <div className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-tertiary text-lg">database</span>
+              <span className="font-headline font-bold text-xs uppercase tracking-wider text-on-surface">
+                Pengaturan Lanjutan Penyimpanan &amp; Integritas Data
+              </span>
+            </div>
+            <span className="text-[10px] font-mono bg-surface-bright px-2 py-0.5 border border-outline/20">
+              Opsional • Offline Standby
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {/* Source 1 */}
+            <div className="p-3 bg-surface-bright border border-outline flex flex-col justify-between">
+              <div>
+                <span className="text-[10px] font-mono font-bold text-on-surface-variant block uppercase">Root Path 1 (NTFS)</span>
+                <span className="font-headline font-bold text-xs text-on-surface block mt-1">D:\Music\Lossless Archives</span>
+                <span className="text-[11px] font-mono text-on-surface-variant mt-0.5 block">14,210 tracks • 682.4 GB</span>
+              </div>
+              <div className="w-full h-1.5 bg-surface-container mt-2 overflow-hidden border border-outline/20">
+                <div className="bg-tertiary h-full w-[74%]"></div>
+              </div>
+            </div>
+
+            {/* Source 2 */}
+            <div className="p-3 bg-surface-bright border border-outline flex flex-col justify-between">
+              <div>
+                <span className="text-[10px] font-mono font-bold text-on-surface-variant block uppercase">Root Path 2 (exFAT)</span>
+                <span className="font-headline font-bold text-xs text-on-surface block mt-1">E:\Audio\Vinyl Dips</span>
+                <span className="text-[11px] font-mono text-on-surface-variant mt-0.5 block">4,210 tracks • 314.1 GB</span>
+              </div>
+              <div className="w-full h-1.5 bg-surface-container mt-2 overflow-hidden border border-outline/20">
+                <div className="bg-primary h-full w-[42%]"></div>
+              </div>
+            </div>
+
+            {/* SQLite Health Actions */}
+            <div className="p-3 bg-surface-bright border border-outline flex flex-col justify-between">
+              <div>
+                <span className="text-[10px] font-mono font-bold text-on-surface-variant block uppercase">SQLite Engine</span>
+                <span className="font-headline font-bold text-xs text-tertiary block mt-1">Integrity: 100% OK (WAL Mode)</span>
+                <span className="text-[10px] font-mono text-on-surface-variant mt-0.5 block">Zero Telemetry • RAM Cache: 840MB</span>
+              </div>
+              <button
+                onClick={() => setShowChecksumModal(true)}
+                className="mt-2 w-full py-1 px-2 bg-primary text-on-primary font-headline font-bold text-[10px] uppercase hover:bg-primary-container hover:text-on-primary-container transition-colors cursor-pointer border border-outline"
+              >
+                Verifikasi Checksum
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Main Vault Track List & Playlists */}
+      <div className="grid grid-cols-12 gap-5 items-start">
+        {/* Playlists Quick Shelf */}
+        <div className="col-span-12 lg:col-span-3 flex flex-col gap-3">
+          <div className="bg-surface-bright p-3.5 shadow-sm flex flex-col gap-2.5 border-2 border-outline">
+            <div className="flex items-center justify-between pb-1.5 border-b border-outline/20">
+              <span className="font-headline font-bold text-xs uppercase tracking-wider text-on-surface">
+                Daftar Putar (Playlist)
+              </span>
+              <span className="text-[10px] font-mono font-bold text-tertiary">CEPAT</span>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              {playlists.map((pl) => (
+                <div
+                  key={pl.id}
+                  onClick={() => handleAddToPlaylist(pl.id)}
+                  className={`p-2.5 cursor-pointer transition-all border border-outline ${
+                    pl.isDropZone
+                      ? 'bg-primary-container text-on-primary-container shadow-[2px_2px_0px_#1a1a1a]'
+                      : 'bg-surface hover:bg-surface-container-high text-on-surface shadow-[1px_1px_0px_#1a1a1a]'
+                  }`}
+                  title="Klik untuk menambahkan lagu aktif ke playlist ini"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="material-symbols-outlined text-[18px]">
+                        {pl.isDropZone ? 'queue_music' : 'album'}
+                      </span>
+                      <span className="font-headline font-bold text-xs uppercase truncate">{pl.title}</span>
+                    </div>
+                    <span className="font-mono text-[10px] font-bold shrink-0">{pl.trackCount}</span>
+                  </div>
+                </div>
+              ))}
+
+              <button
+                onClick={() => {
+                  const newName = `Koleksi #${playlists.length + 1}`;
+                  setPlaylists((prev) => [
+                    ...prev,
+                    { id: `p-${Date.now()}`, title: newName, trackCount: 0, subtitle: 'Lossless' },
+                  ]);
+                }}
+                className="w-full py-2 px-2.5 bg-surface-container hover:bg-surface-container-high text-on-surface font-headline text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors border border-outline cursor-pointer mt-1"
+              >
+                <span className="material-symbols-outlined text-[16px]">add</span>
+                <span>+ Buat Playlist Baru</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Track List Table / Cards */}
+        <div className="col-span-12 lg:col-span-9 flex flex-col gap-3">
+          <div className="bg-surface-bright p-3 shadow-sm flex items-center justify-between border-2 border-outline">
+            <div className="flex items-center gap-2.5">
+              <span className="font-headline font-bold text-sm uppercase tracking-tight text-on-surface">
+                Daftar Koleksi Lagu
+              </span>
+              <span className="px-2 py-0.5 bg-primary text-on-primary font-mono text-[10px] font-bold">
+                {filteredTracks.length} Lagu Ditampilkan
+              </span>
+            </div>
+            <span className="text-xs font-mono text-on-surface-variant hidden sm:inline">
+              Klik baris lagu untuk langsung memutar
+            </span>
+          </div>
+
+          <div className="bg-surface-bright shadow-md overflow-hidden border-2 border-outline">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse select-none">
+                <thead>
+                  <tr className="bg-surface-container text-[11px] font-headline font-bold uppercase tracking-wider text-on-surface border-b-2 border-outline">
+                    <th className="py-2.5 px-3 w-12 text-center">#</th>
+                    <th className="py-2.5 px-3">Judul Lagu</th>
+                    <th className="py-2.5 px-3">Artis</th>
+                    <th className="py-2.5 px-3 hidden md:table-cell">Album</th>
+                    <th className="py-2.5 px-3">Format</th>
+                    <th className="py-2.5 px-3 hidden sm:table-cell">Bitrate</th>
+                    <th className="py-2.5 px-3 text-right">Durasi</th>
+                    <th className="py-2.5 px-3 text-center">Putar</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y-0 text-xs font-body">
+                  {filteredTracks.map((track) => {
+                    const isTrackActive = currentTrack?.id === track.id;
+                    const isTrack2Special = track.id === 'track-02' && !swipedItemRestored;
+
+                    if (isTrack2Special) {
+                      return (
+                        <tr
+                          key={track.id}
+                          className="bg-primary-container/30 relative border-b border-outline"
+                        >
+                          <td className="py-3 px-3 text-center font-mono font-bold text-tertiary">
+                            <span className="material-symbols-outlined text-[18px]">drag_indicator</span>
+                          </td>
+                          <td className="py-3 px-3" colSpan={4}>
+                            <div className="flex items-center gap-3">
+                              <div className="w-2.5 h-2.5 bg-secondary animate-ping rounded-full shrink-0"></div>
+                              <div className="flex flex-col min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-headline font-bold text-sm text-on-surface truncate">
+                                    {track.title}
+                                  </span>
+                                  <span className="px-1.5 py-0.2 bg-secondary text-on-secondary font-mono text-[9px] font-bold uppercase shrink-0">
+                                    {track.badge}
+                                  </span>
+                                </div>
+                                <span className="font-mono text-[11px] text-on-surface-variant truncate">
+                                  {track.artist} • {track.album}
+                                </span>
+                              </div>
+                              <div className="ml-auto flex items-center gap-2 px-2.5 py-1 bg-primary text-on-primary font-headline text-xs font-bold uppercase shadow-sm shrink-0">
+                                <span className="hidden sm:inline">Disematkan di Ref. Vol. 1</span>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSwipedItemRestored(true);
+                                  }}
+                                  className="px-1.5 py-0.5 bg-secondary text-on-secondary text-[10px] font-mono uppercase hover:bg-surface-bright hover:text-on-surface transition-colors cursor-pointer"
+                                >
+                                  Batal
+                                </button>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="py-3 px-3 font-mono text-[11px] text-on-surface hidden sm:table-cell">
+                            {track.bitrate}
+                          </td>
+                          <td className="py-3 px-3 text-right font-mono font-bold text-on-surface">
+                            {track.durationFormatted}
+                          </td>
+                          <td className="py-3 px-3 text-center">
+                            <button
+                              onClick={() => onPlayTrack(track)}
+                              className="w-7 h-7 bg-primary text-primary-container hover:bg-secondary hover:text-white flex items-center justify-center transition-colors cursor-pointer mx-auto shadow-sm"
+                              title="Putar Langsung"
+                            >
+                              <span className="material-symbols-outlined text-[16px]">play_arrow</span>
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    return (
+                      <tr
+                        key={track.id}
+                        onClick={() => onPlayTrack(track)}
+                        className={`transition-colors cursor-pointer border-b border-outline/15 ${
+                          isTrackActive
+                            ? 'bg-primary-container/40 font-semibold'
+                            : 'bg-surface-container-lowest hover:bg-surface-container-high'
+                        }`}
+                      >
+                        <td className="py-3 px-3 text-center font-mono font-bold text-on-surface-variant">
+                          {isTrackActive && isPlaying ? (
+                            <span className="material-symbols-outlined text-[15px] text-tertiary animate-pulse">
+                              volume_up
+                            </span>
+                          ) : (
+                            track.trackNumber
+                          )}
+                        </td>
+                        <td className="py-3 px-3">
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className={`font-headline font-bold text-on-surface tracking-tight ${
+                                isTrackActive ? 'text-tertiary' : ''
+                              }`}
+                            >
+                              {track.title}
+                            </span>
+                            {track.badge && (
+                              <span className="px-1.5 py-0.2 bg-primary-container text-on-primary-container font-mono text-[9px] font-bold shrink-0">
+                                {track.badge}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="py-3 px-3 font-semibold text-on-surface truncate max-w-[140px]">
+                          {track.artist}
+                        </td>
+                        <td className="py-3 px-3 text-on-surface-variant italic truncate max-w-[160px] hidden md:table-cell">
+                          {track.album}
+                        </td>
+                        <td className="py-3 px-3 whitespace-nowrap">
+                          <span className="px-2 py-0.5 bg-surface-container-high font-mono text-[10px] font-bold text-tertiary border border-outline/20">
+                            {track.format} {track.sampleRate.replace('kHz', '')}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3 font-mono text-[11px] text-on-surface whitespace-nowrap hidden sm:table-cell">
+                          {track.bitrate}
+                        </td>
+                        <td className="py-3 px-3 text-right font-mono font-bold text-on-surface whitespace-nowrap">
+                          {track.durationFormatted}
+                        </td>
+                        <td className="py-3 px-3 text-center">
+                          <button
+                            aria-label={`Putar ${track.title}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onPlayTrack(track);
+                            }}
+                            className="w-7 h-7 bg-surface-container hover:bg-primary hover:text-white flex items-center justify-center transition-colors cursor-pointer mx-auto border border-outline"
+                            title="Putar Langsung"
+                          >
+                            <span className="material-symbols-outlined text-[16px]">play_arrow</span>
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Quick Filter by letter */}
+            <div className="p-2.5 bg-surface-container flex flex-wrap items-center justify-between text-xs font-mono gap-2 border-t border-outline">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="font-bold text-on-surface text-[11px]">Lompat ke huruf:</span>
+                <div className="flex gap-1 text-[10px] font-bold text-on-surface-variant flex-wrap">
+                  {['A', 'B', 'C', 'D', 'E', 'M', 'S', 'T', 'Z'].map((letter) => (
+                    <button
+                      key={letter}
+                      onClick={() => setSearchQuery(letter)}
+                      className="px-1.5 py-0.5 bg-surface border border-outline/30 hover:bg-primary hover:text-white cursor-pointer"
+                    >
+                      {letter}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="flex items-center gap-2 text-[10px]">
+                <span className="font-bold text-primary bg-primary-container px-1.5 py-0.5 border border-outline">
+                  100% Offline Database
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Modal: Add Folder */}
+      {showAddFolderModal && (
+        <div className="fixed inset-0 bg-primary/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-surface-bright border-2 border-outline shadow-[6px_6px_0px_#1a1a1a] p-6 max-w-lg w-full flex flex-col gap-4">
+            <div className="flex items-center justify-between border-b-2 border-outline pb-2">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-tertiary text-2xl">create_new_folder</span>
+                <h3 className="font-headline font-bold text-base uppercase">Pilih Folder Musik Lokal</h3>
+              </div>
+              <button onClick={() => setShowAddFolderModal(false)} className="p-1 hover:bg-surface-container cursor-pointer">
+                <span className="material-symbols-outlined text-lg">close</span>
+              </button>
+            </div>
+            <p className="text-xs text-on-surface-variant font-body leading-relaxed">
+              Resonance Core memindai folder lokal tanpa telemetri atau koneksi internet. Semua file FLAC, WAV, DSD, dan MP3 di dalam folder akan langsung diindeks ke dalam database lokal.
+            </p>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[10px] font-label font-bold uppercase text-on-surface-variant">Direktori Folder</label>
+              <input
+                type="text"
+                defaultValue="D:\Music\Lossless_Masters_2024"
+                className="w-full bg-surface-container px-3 py-2 text-xs font-mono border-2 border-outline focus:outline-none focus:bg-primary-container"
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                onClick={() => setShowAddFolderModal(false)}
+                className="px-4 py-2 bg-surface-container text-on-surface font-headline font-bold text-xs uppercase border border-outline cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                onClick={() => {
+                  setShowAddFolderModal(false);
+                  handleSync();
+                }}
+                className="px-4 py-2 bg-primary text-on-primary font-headline font-bold text-xs uppercase hover:bg-primary-container hover:text-on-primary-container transition-colors cursor-pointer border border-outline"
+              >
+                Mulai Indeks
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Verify Checksums */}
+      {showChecksumModal && (
+        <div className="fixed inset-0 bg-primary/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-surface-bright border-2 border-outline shadow-[6px_6px_0px_#1a1a1a] p-6 max-w-lg w-full flex flex-col gap-4">
+            <div className="flex items-center justify-between border-b-2 border-outline pb-2">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-primary text-2xl">verified</span>
+                <h3 className="font-headline font-bold text-base uppercase">Audit Integritas Checksum</h3>
+              </div>
+              <button onClick={() => setShowChecksumModal(false)} className="p-1 hover:bg-surface-container cursor-pointer">
+                <span className="material-symbols-outlined text-lg">close</span>
+              </button>
+            </div>
+            <div className="space-y-2 font-mono text-xs bg-surface-container-lowest p-3 border-2 border-outline">
+              <div className="text-tertiary font-bold">✓ SQLite Database: PRAGMA integrity_check -&gt; "OK"</div>
+              <div className="text-primary font-semibold">✓ 18,420 Hash Blok Audio MD5 Terverifikasi</div>
+              <div className="text-on-surface-variant">✓ Zero Bit-Rot Detected pada arsip 996.5 GB</div>
+              <div className="text-secondary font-bold">✓ Latensi Akses I/O Rata-rata: 0.28ms</div>
+            </div>
+            <div className="flex justify-end pt-2">
+              <button
+                onClick={() => setShowChecksumModal(false)}
+                className="px-4 py-2 bg-primary text-on-primary font-headline font-bold text-xs uppercase cursor-pointer"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};

@@ -1,0 +1,6 @@
+{
+  "name": "Resonance Core",
+  "description": "Bit-Perfect Lossless Audiophile Music Player, DSP Workstation & Offline Audio Engine",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
