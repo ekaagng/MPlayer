@@ -124,7 +124,7 @@ export const OutputSettingsView: React.FC<OutputSettingsViewProps> = ({
               className="w-full bg-surface text-on-surface font-headline font-semibold text-sm p-3 appearance-none cursor-pointer focus:outline-none focus:bg-primary-container transition-colors pr-10 border-2 border-outline shadow-[2px_2px_0px_#1a1a1a]"
             >
               <option value="topping">Topping D90 III Sabre DAC [Direct USB-C / OTG]</option>
-              <option value="schiit">Schiit Bifrost 2 [Exclusive Bit-Perfect]</option>
+              <option value="schiit">Schiit Bifrost 2 [Preferensi saja]</option>
               <option value="realtek">Speaker / Headphone Internal (Realtek Audio)</option>
             </select>
             <span className="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-on-surface">
@@ -150,7 +150,7 @@ export const OutputSettingsView: React.FC<OutputSettingsViewProps> = ({
               </span>
               {settings.wasapiMode === 'exclusive' && (
                 <span className="text-[10px] font-mono font-bold bg-primary text-white px-1.5 py-0.2">
-                  AKTIF
+                  TERPILIH
                 </span>
               )}
             </div>
@@ -191,7 +191,7 @@ export const OutputSettingsView: React.FC<OutputSettingsViewProps> = ({
               Peralihan Otomatis (Fallback)
             </span>
             <span className="text-[11px] text-on-surface-variant font-body">
-              Secara cerdas beralih ke Shared Mode jika DAC digunakan aplikasi lain
+              Opsi fallback belum berjalan pada preview; backend audio native belum terhubung.
             </span>
           </div>
           <button
