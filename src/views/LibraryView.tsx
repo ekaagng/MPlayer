@@ -186,7 +186,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
       <div className="flex flex-col gap-3 bg-surface-bright p-4 shadow-sm border-2 border-outline">
         <div className="flex flex-wrap items-center justify-between gap-3">
           {/* Main Search Input */}
-          <div className="relative flex-1 min-w-[260px] md:min-w-[340px]">
+          <div className="relative min-w-0 w-full flex-1 md:min-w-[340px]">
             <div className="relative flex items-center bg-surface-container-lowest border-2 border-outline shadow-[2px_2px_0px_#1a1a1a]">
               <span className="material-symbols-outlined absolute left-3 text-on-surface-variant text-[20px]">
                 search
@@ -215,10 +215,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           </div>
 
           {/* Quick Actions */}
-          <div className="flex items-center gap-2">
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
             <button
               onClick={handleSync}
-              className="flex items-center gap-1.5 px-3 py-2 bg-surface-container hover:bg-surface-container-high text-xs font-label font-bold uppercase text-on-surface border border-outline cursor-pointer transition-colors shadow-[1px_1px_0px_#1a1a1a]"
+              className="flex flex-1 items-center justify-center gap-1.5 px-3 py-2 bg-surface-container hover:bg-surface-container-high text-xs font-label font-bold uppercase text-on-surface border border-outline cursor-pointer transition-colors shadow-[1px_1px_0px_#1a1a1a] sm:flex-none"
               title="Perbarui daftar lagu"
             >
               <span className={`material-symbols-outlined text-[16px] text-tertiary ${isSyncing ? 'animate-spin' : ''}`}>
@@ -229,7 +229,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 
             <button
               onClick={() => setShowAddFolderModal(true)}
-              className="flex items-center gap-1.5 px-4 py-2 bg-primary-container text-on-primary-container font-headline text-xs font-bold uppercase tracking-wider hover:bg-primary hover:text-on-primary transition-colors shadow-[2px_2px_0px_#1a1a1a] cursor-pointer border-2 border-outline"
+              className="flex flex-1 items-center justify-center gap-1.5 px-3 py-2 bg-primary-container text-on-primary-container font-headline text-xs font-bold uppercase tracking-wider hover:bg-primary hover:text-on-primary transition-colors shadow-[2px_2px_0px_#1a1a1a] cursor-pointer border-2 border-outline sm:flex-none"
             >
               <span className="material-symbols-outlined text-[18px]">create_new_folder</span>
               <span>Tambah Folder</span>
@@ -429,7 +429,50 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             </span>
           </div>
 
-          <div className="bg-surface-bright shadow-md overflow-hidden border-2 border-outline">
+          <div className="flex flex-col gap-2 md:hidden">
+            {displayedTracks.length === 0 ? (
+              <div className="rounded-xl border border-outline/15 bg-surface-bright px-4 py-10 text-center text-sm text-on-surface-variant">
+                {selectedPlaylist ? 'Playlist ini belum memiliki lagu.' : 'Tidak ada lagu yang cocok dengan pencarian atau filter.'}
+              </div>
+            ) : displayedTracks.map((track) => (
+              <article key={track.id} className="rounded-xl border border-outline/15 bg-surface-bright p-3 shadow-sm">
+                <div className="flex min-w-0 items-start gap-3">
+                  <div className="min-w-0 flex-1">
+                    <h3 className="break-words text-sm font-bold leading-snug text-on-surface">{track.title}</h3>
+                    <p className="mt-1 break-words text-xs font-medium text-on-surface-variant">{track.artist}</p>
+                    <p className="mt-0.5 break-words text-[11px] text-on-surface-variant">{track.album}</p>
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                      <span className="rounded-md bg-primary-container px-2 py-1 text-[10px] font-bold text-on-primary-container">{track.format}</span>
+                      <span className="rounded-md bg-surface-container px-2 py-1 font-mono text-[10px] text-on-surface">{track.sampleRate} · {track.bitDepth}</span>
+                      <span className="rounded-md bg-surface-container px-2 py-1 font-mono text-[10px] text-on-surface">{track.durationFormatted}</span>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 flex-col gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setTrackToAdd(track)}
+                      aria-label={'Tambahkan ' + track.title + ' ke playlist'}
+                      title="Tambahkan ke playlist"
+                      className="flex h-10 w-10 items-center justify-center rounded-lg border border-outline/15 text-on-surface hover:bg-surface-container"
+                    >
+                      <span className="material-symbols-outlined text-xl">playlist_add</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onPlayTrack(track)}
+                      aria-label={'Putar ' + track.title}
+                      title="Putar"
+                      className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-on-primary"
+                    >
+                      <span className="material-symbols-outlined text-xl">play_arrow</span>
+                    </button>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+
+          <div className="hidden overflow-hidden rounded-xl border border-outline/15 bg-surface-bright shadow-sm md:block">
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse select-none">
                 <thead>
