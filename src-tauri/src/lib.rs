@@ -98,6 +98,16 @@ fn initialize_database(path: &Path) -> Result<(), String> {
             );
             CREATE INDEX IF NOT EXISTS idx_tracks_title ON tracks(title COLLATE NOCASE);
             CREATE INDEX IF NOT EXISTS idx_tracks_format ON tracks(format);
+            CREATE TABLE IF NOT EXISTS library_roots (
+                root_path TEXT PRIMARY KEY,
+                last_scanned_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS library_root_tracks (
+                root_path TEXT NOT NULL REFERENCES library_roots(root_path) ON DELETE CASCADE,
+                track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+                PRIMARY KEY (root_path, track_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_library_root_tracks_track_id ON library_root_tracks(track_id);
             CREATE TABLE IF NOT EXISTS playlists (
                 id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL UNIQUE,
@@ -259,6 +269,101 @@ fn save_lyrics_to_db(connection: &Connection, track_id: i64, lrc_text: &str) -> 
     Ok(())
 }
 
+#[derive(Debug, Clone)]
+struct ScannedFile {
+    path: String,
+    title: String,
+    format: String,
+    size_bytes: i64,
+    modified_at: Option<i64>,
+}
+
+fn apply_scan_results(
+    connection: &Connection,
+    root_path: &str,
+    files: &[ScannedFile],
+    truncated: bool,
+) -> Result<(), String> {
+    connection.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS scan_seen_track_ids (track_id INTEGER PRIMARY KEY);
+         CREATE TEMP TABLE IF NOT EXISTS scan_removed_track_ids (track_id INTEGER PRIMARY KEY);
+         DELETE FROM scan_seen_track_ids;
+         DELETE FROM scan_removed_track_ids;"
+    ).map_err(|error| format!("Tabel sementara pemindaian gagal disiapkan: {error}"))?;
+
+    let transaction = connection.unchecked_transaction()
+        .map_err(|error| format!("Transaksi database gagal: {error}"))?;
+    transaction.execute(
+        "INSERT INTO library_roots (root_path) VALUES (?1)
+         ON CONFLICT(root_path) DO NOTHING",
+        [root_path],
+    ).map_err(|error| format!("Folder library tidak dapat dicatat: {error}"))?;
+
+    for file in files {
+        transaction.execute(
+            "INSERT INTO tracks (path, title, format, size_bytes, modified_at, scanned_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP)
+             ON CONFLICT(path) DO UPDATE SET
+               title = excluded.title,
+               format = excluded.format,
+               size_bytes = excluded.size_bytes,
+               modified_at = excluded.modified_at,
+               scanned_at = CURRENT_TIMESTAMP",
+            params![file.path, file.title, file.format, file.size_bytes, file.modified_at],
+        ).map_err(|error| format!("Menyimpan indeks track gagal: {error}"))?;
+
+        let track_id: i64 = transaction.query_row(
+            "SELECT id FROM tracks WHERE path = ?1",
+            [&file.path],
+            |row| row.get(0),
+        ).map_err(|error| format!("ID track yang dipindai tidak dapat dibaca: {error}"))?;
+
+        transaction.execute(
+            "INSERT OR IGNORE INTO library_root_tracks (root_path, track_id) VALUES (?1, ?2)",
+            params![root_path, track_id],
+        ).map_err(|error| format!("Relasi folder dan track gagal disimpan: {error}"))?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO scan_seen_track_ids (track_id) VALUES (?1)",
+            [track_id],
+        ).map_err(|error| format!("Daftar hasil pemindaian gagal disimpan: {error}"))?;
+    }
+
+    if !truncated {
+        transaction.execute(
+            "INSERT OR IGNORE INTO scan_removed_track_ids (track_id)
+             SELECT track_id FROM library_root_tracks
+             WHERE root_path = ?1
+               AND track_id NOT IN (SELECT track_id FROM scan_seen_track_ids)",
+            [root_path],
+        ).map_err(|error| format!("Rekonsiliasi library gagal disiapkan: {error}"))?;
+
+        transaction.execute(
+            "DELETE FROM library_root_tracks
+             WHERE root_path = ?1
+               AND track_id NOT IN (SELECT track_id FROM scan_seen_track_ids)",
+            [root_path],
+        ).map_err(|error| format!("File yang tidak lagi tersedia gagal direkonsiliasi: {error}"))?;
+
+        transaction.execute(
+            "DELETE FROM tracks
+             WHERE id IN (SELECT track_id FROM scan_removed_track_ids)
+               AND NOT EXISTS (
+                 SELECT 1 FROM library_root_tracks
+                 WHERE library_root_tracks.track_id = tracks.id
+               )",
+            [],
+        ).map_err(|error| format!("Indeks file yang dihapus gagal dibersihkan: {error}"))?;
+    }
+
+    transaction.execute(
+        "UPDATE library_roots SET last_scanned_at = CURRENT_TIMESTAMP WHERE root_path = ?1",
+        [root_path],
+    ).map_err(|error| format!("Waktu pemindaian tidak dapat disimpan: {error}"))?;
+
+    transaction.commit().map_err(|error| format!("Menyimpan hasil scan gagal: {error}"))?;
+    Ok(())
+}
+
 fn supported_audio_file(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
@@ -363,9 +468,6 @@ fn native_scan_music_directory(path: String, state: State<'_, AppState>) -> Resu
     }
     let root = selected.canonicalize().map_err(|error| format!("Folder tidak dapat dibuka: {error}"))?;
     let connection = open_database(&state.database_path)?;
-    let transaction = connection
-        .unchecked_transaction()
-        .map_err(|error| format!("Transaksi database gagal: {error}"))?;
 
     let mut pending = vec![root.clone()];
     let mut paths = Vec::<PathBuf>::new();
@@ -395,6 +497,7 @@ fn native_scan_music_directory(path: String, state: State<'_, AppState>) -> Resu
         }
     }
 
+    let mut scanned_files = Vec::with_capacity(paths.len());
     for file_path in &paths {
         let metadata = fs::metadata(file_path)
             .map_err(|error| format!("Metadata file tidak dapat dibaca: {error}"))?;
@@ -412,24 +515,18 @@ fn native_scan_music_directory(path: String, state: State<'_, AppState>) -> Resu
             .and_then(|value| value.to_str())
             .unwrap_or("unknown")
             .to_ascii_uppercase();
-        let size_bytes = metadata.len().min(i64::MAX as u64) as i64;
-        let modified_at = file_modified_timestamp(file_path);
-        transaction.execute(
-            "INSERT INTO tracks (path, title, format, size_bytes, modified_at, scanned_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP)
-             ON CONFLICT(path) DO UPDATE SET
-               title = excluded.title,
-               format = excluded.format,
-               size_bytes = excluded.size_bytes,
-               modified_at = excluded.modified_at,
-               scanned_at = CURRENT_TIMESTAMP",
-            params![canonical_path, title, format, size_bytes, modified_at],
-        ).map_err(|error| format!("Menyimpan indeks track gagal: {error}"))?;
+        scanned_files.push(ScannedFile {
+            path: canonical_path,
+            title,
+            format,
+            size_bytes: metadata.len().min(i64::MAX as u64) as i64,
+            modified_at: file_modified_timestamp(file_path),
+        });
     }
 
-    transaction.commit().map_err(|error| format!("Menyimpan hasil scan gagal: {error}"))?;
-    let tracks = list_tracks_from_db(&connection)?;
     let scanned_folder = root.to_string_lossy().into_owned();
+    apply_scan_results(&connection, &scanned_folder, &scanned_files, truncated)?;
+    let tracks = list_tracks_from_db(&connection)?;
     Ok(ScanResult { tracks, truncated, scanned_folder })
 }
 
@@ -555,10 +652,10 @@ fn snapshot_from_playback(playback: &NativePlayback) -> PlaybackSnapshot {
 #[cfg(test)]
 mod tests {
     use super::{
-        add_track_to_playlist_in_db, create_playlist_in_db, delete_playlist_in_db,
-        get_lyrics_from_db, initialize_database, list_playlists_from_db, list_tracks_from_db,
-        open_database, rename_playlist_in_db, save_lyrics_to_db, supported_audio_file,
-        AUDIO_EXTENSIONS,
+        add_track_to_playlist_in_db, apply_scan_results, create_playlist_in_db,
+        delete_playlist_in_db, get_lyrics_from_db, initialize_database, list_playlists_from_db,
+        list_tracks_from_db, open_database, rename_playlist_in_db, save_lyrics_to_db,
+        supported_audio_file, ScannedFile, AUDIO_EXTENSIONS,
     };
     use rusqlite::Connection;
     use std::{fs, path::Path, time::{SystemTime, UNIX_EPOCH}};
@@ -596,11 +693,11 @@ mod tests {
         let connection = Connection::open(&database_path).expect("test database should open");
         let table_count: i64 = connection.query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN
-             ('tracks', 'playlists', 'playlist_tracks', 'playback_history', 'lyrics', 'settings')",
+             ('tracks', 'library_roots', 'library_root_tracks', 'playlists', 'playlist_tracks', 'playback_history', 'lyrics', 'settings')",
             [],
             |row| row.get(0),
         ).expect("schema count query should succeed");
-        assert_eq!(table_count, 6);
+        assert_eq!(table_count, 8);
 
         connection.execute(
             "INSERT INTO tracks (path, title, format, size_bytes, modified_at)
@@ -615,6 +712,27 @@ mod tests {
         drop(connection);
 
         let connection = open_database(&database_path).expect("foreign keys should be active");
+        let root = test_dir.to_string_lossy().into_owned();
+        let make_file = |name: &str| ScannedFile {
+            path: format!("{root}/{name}"),
+            title: name.trim_end_matches(".flac").trim_end_matches(".wav").to_string(),
+            format: if name.ends_with(".wav") { "WAV".to_string() } else { "FLAC".to_string() },
+            size_bytes: 2048,
+            modified_at: None,
+        };
+        apply_scan_results(&connection, &root, &[make_file("first.flac"), make_file("second.wav")], false)
+            .expect("first scan should index all tracks");
+        assert_eq!(list_tracks_from_db(&connection).expect("tracks should be readable").len(), 3);
+
+        apply_scan_results(&connection, &root, &[make_file("second.wav")], false)
+            .expect("complete rescan should reconcile deleted files");
+        let remaining = list_tracks_from_db(&connection).expect("reconciled tracks should be readable");
+        assert_eq!(remaining.len(), 2);
+        assert!(!remaining.iter().any(|track| track.title == "first"));
+        let third = make_file("third.flac");
+        apply_scan_results(&connection, &root, &[make_file("second.wav"), third.clone()], true)
+            .expect("truncated scan should index tracks without deleting unscanned data");
+        assert_eq!(list_tracks_from_db(&connection).expect("tracks should be readable").len(), 3);
         let playlist = create_playlist_in_db(&connection, "  Night Drive  ")
             .expect("playlist should be created");
         assert_eq!(playlist.name, "Night Drive");
