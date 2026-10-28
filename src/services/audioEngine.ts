@@ -1,4 +1,5 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
+import { saveNativeEqualizer } from './nativeBridge';
 import type { NativePlaybackSnapshot } from './nativeBridge';
 import type { EqualizerState, EQFrequency, Track } from '../types/audio';
 
@@ -251,6 +252,12 @@ class AudioEngine {
 
   public setEqualizer(state: EqualizerState): void {
     this.eqState = { ...state, bands: { ...state.bands } };
+    if (isTauri()) {
+      void saveNativeEqualizer(this.eqState).catch((error: unknown) => {
+        console.error('[AudioEngine] Native equalizer update failed:', error);
+      });
+      return;
+    }
     this.applyEq();
   }
 
