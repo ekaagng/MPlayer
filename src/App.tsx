@@ -61,7 +61,8 @@ export default function App() {
     frequencyData: new Uint8Array(128),
   });
 
-  const isBitPerfect = !eqState.enabled || eqState.abMode === 'B';
+  // Browser Web Audio cannot verify the native output path or prove bit-perfect playback.
+  const isBitPerfect = false;
 
   useEffect(() => {
     const unsubscribe = audioEngine.subscribeTelemetry((t) => {
