@@ -11,14 +11,15 @@
     "lint": "tsc --noEmit",
     "test:lrc": "tsx --test src/utils/lrcParser.test.ts",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build",
+    "tauri:dev": "node scripts/generate-native-icon.mjs && tauri dev",
+    "tauri:build": "node scripts/generate-native-icon.mjs && tauri build",
     "android:init": "tauri android init",
-    "android:dev": "tauri android dev",
-    "android:build": "tauri android build",
+    "android:dev": "node scripts/generate-native-icon.mjs && tauri android dev",
+    "android:build": "node scripts/generate-native-icon.mjs && tauri android build",
     "ios:init": "tauri ios init",
-    "ios:dev": "tauri ios dev",
-    "ios:build": "tauri ios build"
+    "ios:dev": "node scripts/generate-native-icon.mjs && tauri ios dev",
+    "ios:build": "node scripts/generate-native-icon.mjs && tauri ios build",
+    "native:icon": "node scripts/generate-native-icon.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
