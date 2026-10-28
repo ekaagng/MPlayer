@@ -181,6 +181,28 @@ class AudioEngine {
     this.emitTelemetry();
   }
 
+  public stop(): void {
+    if (this.nativePlayback) {
+      void invoke('native_stop').catch((error: unknown) => {
+        console.error('[AudioEngine] Native stop failed:', error);
+      });
+    } else if (this.audio) {
+      this.audio.pause();
+      try {
+        this.audio.currentTime = 0;
+      } catch {
+        // The media element may not have loaded metadata yet.
+      }
+    }
+
+    this.isPlaying = false;
+    this.currentTrack = null;
+    this.nativeCurrentTimeMs = 0;
+    this.nativeDurationMs = 0;
+    this.stopTelemetryLoop();
+    this.emitTelemetry();
+  }
+
   public resume(): void {
     if (!this.currentTrack) return;
     void this.playTrack(this.currentTrack, this.getCurrentPositionMs()).catch((error: unknown) => {
