@@ -190,6 +190,7 @@ export default function App() {
             currentTimeMs={currentTimeMs}
             onSeek={handleSeek}
             onPlayTrack={(track) => { void handlePlayTrack(track); }}
+            isNativeRuntime={isNativeRuntime}
           />
         )}
 
