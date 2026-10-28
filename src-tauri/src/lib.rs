@@ -498,6 +498,9 @@ fn list_recent_history_from_db(connection: &Connection, limit: u32) -> Result<Ve
                 h.played_at, h.last_position_ms
          FROM playback_history h
          INNER JOIN tracks t ON t.id = h.track_id
+         WHERE h.id = (
+             SELECT MAX(latest.id) FROM playback_history latest WHERE latest.track_id = t.id
+         )
          ORDER BY h.id DESC
          LIMIT ?1"
     ).map_err(|error| format!("Query riwayat playback gagal: {error}"))?;
