@@ -26,6 +26,7 @@ struct NativePlayback {
     sink: Option<Sink>,
     track_path: Option<String>,
     track_id: Option<i64>,
+    history_finalized: bool,
     duration_ms: u64,
     volume: f32,
 }
@@ -475,20 +476,37 @@ fn list_tracks_from_db(connection: &Connection) -> Result<Vec<NativeTrack>, Stri
         .map_err(|error| format!("Membaca track gagal: {error}"))
 }
 
-fn persist_current_playback_position(playback: &NativePlayback, database_path: &Path) -> Result<(), String> {
-    let Some(track_id) = playback.track_id else {
-        return Ok(());
-    };
-    let position_ms = playback.sink.as_ref()
-        .map(|sink| sink.get_pos().as_millis().min(i64::MAX as u128) as i64)
-        .unwrap_or(0);
+fn persist_playback_position(
+    database_path: &Path,
+    track_id: i64,
+    position_ms: u64,
+) -> Result<(), String> {
     let connection = open_database(database_path)?;
     connection.execute(
         "UPDATE playback_history SET last_position_ms = ?1
          WHERE id = (SELECT id FROM playback_history WHERE track_id = ?2 ORDER BY id DESC LIMIT 1)",
-        params![position_ms, track_id],
+        params![position_ms.min(i64::MAX as u64) as i64, track_id],
     ).map_err(|error| format!("Posisi terakhir playback gagal disimpan: {error}"))?;
     Ok(())
+}
+
+fn persist_current_playback_position(
+    playback: &NativePlayback,
+    database_path: &Path,
+    position_override_ms: Option<u64>,
+) -> Result<(), String> {
+    if playback.history_finalized {
+        return Ok(());
+    }
+    let Some(track_id) = playback.track_id else {
+        return Ok(());
+    };
+    let position_ms = position_override_ms.unwrap_or_else(|| {
+        playback.sink.as_ref()
+            .map(|sink| sink.get_pos().as_millis().min(u64::MAX as u128) as u64)
+            .unwrap_or(0)
+    });
+    persist_playback_position(database_path, track_id, position_ms)
 }
 
 fn list_recent_history_from_db(connection: &Connection, limit: u32) -> Result<Vec<NativeHistoryEntry>, String> {
@@ -710,7 +728,7 @@ fn native_play_track(
     });
 
     let mut playback = state.playback.lock().map_err(|_| "State audio terkunci.".to_string())?;
-    let _ = persist_current_playback_position(&playback, &database_path);
+    let _ = persist_current_playback_position(&playback, &database_path, None);
     if playback.output_stream.is_none() {
         playback.output_stream = Some(
             OutputStreamBuilder::open_default_stream()
@@ -734,6 +752,7 @@ fn native_play_track(
     playback.sink = Some(sink);
     playback.track_path = Some(canonical_path_string);
     playback.track_id = indexed_track_id;
+    playback.history_finalized = true;
     playback.duration_ms = duration_ms;
     if let Some(track_id) = playback.track_id {
         match open_database(&database_path).and_then(|connection| {
@@ -742,7 +761,7 @@ fn native_play_track(
                 [track_id],
             ).map(|_| ()).map_err(|error| format!("Riwayat playback gagal disimpan: {error}"))
         }) {
-            Ok(()) => {}
+            Ok(()) => playback.history_finalized = false,
             Err(error) => eprintln!("[MPlayer] {error}"),
         }
     }
@@ -801,13 +820,24 @@ fn native_stop(state: State<'_, AppState>) -> Result<(), String> {
     }
     playback.track_path = None;
     playback.track_id = None;
+    playback.history_finalized = true;
     playback.duration_ms = 0;
     Ok(())
 }
 
 #[tauri::command]
 fn native_playback_state(state: State<'_, AppState>) -> Result<PlaybackSnapshot, String> {
-    let playback = state.playback.lock().map_err(|_| "State audio terkunci.".to_string())?;
+    let database_path = state.database_path.clone();
+    let mut playback = state.playback.lock().map_err(|_| "State audio terkunci.".to_string())?;
+    let finished = playback.sink.as_ref().map(Sink::empty).unwrap_or(false)
+        && playback.duration_ms > 0
+        && !playback.history_finalized;
+
+    if finished {
+        persist_current_playback_position(&playback, &database_path, Some(playback.duration_ms))?;
+        playback.history_finalized = true;
+    }
+
     Ok(snapshot_from_playback(&playback))
 }
 
