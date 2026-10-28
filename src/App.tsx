@@ -177,7 +177,7 @@ export default function App() {
         currentView={currentView}
         onSelectView={setCurrentView}
         isPlaying={isPlaying}
-        trackCount={18420}
+        trackCount={MOCK_TRACKS.length}
       />
 
       {/* Main Content Area */}
