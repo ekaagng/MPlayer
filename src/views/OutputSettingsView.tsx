@@ -139,7 +139,7 @@ export const OutputSettingsView: React.FC<OutputSettingsViewProps> = ({
         {/* 2 Simple Mode Cards (Exclusive vs Shared) */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
           <div
-            onClick={() => onUpdateSettings({ ...settings, wasapiMode: 'exclusive' })}
+            aria-disabled="true"
             className={`p-4 border-2 cursor-pointer transition-all shadow-[2px_2px_0px_#1a1a1a] flex flex-col justify-between ${
               settings.wasapiMode === 'exclusive'
                 ? 'bg-primary-container border-outline text-on-primary-container'
@@ -163,7 +163,7 @@ export const OutputSettingsView: React.FC<OutputSettingsViewProps> = ({
           </div>
 
           <div
-            onClick={() => onUpdateSettings({ ...settings, wasapiMode: 'shared' })}
+            aria-disabled="true"
             className={`p-4 border-2 cursor-pointer transition-all shadow-[2px_2px_0px_#1a1a1a] flex flex-col justify-between ${
               settings.wasapiMode === 'shared'
                 ? 'bg-primary-container border-outline text-on-primary-container'
