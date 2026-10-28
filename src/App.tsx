@@ -3,7 +3,7 @@ import { isTauri } from '@tauri-apps/api/core';
 import { AppView, Track, EqualizerState, OutputSettings } from './types/audio';
 import { MOCK_TRACKS } from './data/mockTracks';
 import { audioEngine } from './services/audioEngine';
-import { getNativeRuntimeInfo, listNativeTracks, toAppTrack } from './services/nativeBridge';
+import { EQ_FREQUENCY_KEYS, getNativeEqualizer, getNativeRuntimeInfo, listNativeTracks, toAppTrack } from './services/nativeBridge';
 import { Header } from './components/Header';
 import { LibraryView } from './views/LibraryView';
 import { NowPlayingView } from './views/NowPlayingView';
@@ -64,9 +64,29 @@ export default function App() {
       if (!mounted) return;
       setIsNativeRuntime(Boolean(runtime));
       if (runtime) {
-        const files = await listNativeTracks();
+        const [files, savedEqualizer] = await Promise.all([
+          listNativeTracks(),
+          getNativeEqualizer(),
+        ]);
         if (!mounted) return;
         const tracks = files.map((file, index) => toAppTrack(file, index));
+        const restoredBands = { ...eqState.bands };
+        EQ_FREQUENCY_KEYS.forEach((frequency, index) => {
+          const value = savedEqualizer.bandsDb[index];
+          if (typeof value === 'number' && Number.isFinite(value)) {
+            restoredBands[frequency] = value;
+          }
+        });
+        const restoredEqualizer: EqualizerState = {
+          ...eqState,
+          enabled: savedEqualizer.enabled,
+          preamp: savedEqualizer.preampDb,
+          autoPreamp: savedEqualizer.autoPreamp,
+          bands: restoredBands,
+          preset: 'custom',
+        };
+        setEqState(restoredEqualizer);
+        audioEngine.setEqualizer(restoredEqualizer);
         setNativeTracks(tracks);
         setPlayQueue(tracks);
         setCurrentTrack(tracks[0] ?? null);
