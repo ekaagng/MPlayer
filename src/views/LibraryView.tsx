@@ -6,7 +6,6 @@ import {
   addNativeTrackToPlaylist,
   createNativePlaylist,
   deleteNativePlaylist,
-  getNativeHistory,
   getNativeRuntimeInfo,
   listNativePlaylists,
   listNativeTracks,
