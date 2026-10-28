@@ -1,6 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
-import type { Playlist, Track } from '../types/audio';
+import type { EqualizerState, EQFrequency, Playlist, Track } from '../types/audio';
 
 export interface NativeRuntimeInfo {
   platform: string;
@@ -40,6 +40,37 @@ export interface NativeHistoryEntry {
   track: NativeTrackFile;
   playedAt: string;
   lastPositionMs: number;
+}
+
+export interface NativeEqualizerSettings {
+  enabled: boolean;
+  preampDb: number;
+  autoPreamp: boolean;
+  bandsDb: number[];
+}
+
+export const EQ_FREQUENCY_KEYS: EQFrequency[] = [
+  '31Hz', '62Hz', '125Hz', '250Hz', '500Hz',
+  '1kHz', '2kHz', '4kHz', '8kHz', '16kHz',
+];
+
+export async function getNativeEqualizer(): Promise<NativeEqualizerSettings> {
+  if (!isTauri()) throw new Error('Pengaturan EQ native hanya tersedia di aplikasi native.');
+  return invoke<NativeEqualizerSettings>('native_get_equalizer');
+}
+
+export async function saveNativeEqualizer(settings: EqualizerState): Promise<void> {
+  if (!isTauri()) return;
+  const positiveBoost = settings.autoPreamp
+    ? Math.max(0, ...Object.values(settings.bands))
+    : 0;
+  const preampDb = Math.max(-12, Math.min(12, settings.preamp - positiveBoost));
+  await invoke<NativeEqualizerSettings>('native_set_equalizer', {
+    enabled: settings.enabled,
+    preampDb,
+    autoPreamp: settings.autoPreamp,
+    bandsDb: EQ_FREQUENCY_KEYS.map((frequency) => settings.bands[frequency]),
+  });
 }
 
 export interface NativePlaybackSnapshot {
