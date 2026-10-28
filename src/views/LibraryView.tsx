@@ -18,12 +18,14 @@ interface LibraryViewProps {
   currentTrack: Track | null;
   isPlaying: boolean;
   onPlayTrack: (track: Track) => void;
+  onNativeTracksChange?: (tracks: Track[]) => void;
 }
 
 export const LibraryView: React.FC<LibraryViewProps> = ({
   currentTrack,
   isPlaying,
   onPlayTrack,
+  onNativeTracksChange,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [isNativeRuntime, setIsNativeRuntime] = useState(() => isTauri());
@@ -75,14 +77,16 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         listNativePlaylists(),
       ]);
       if (mounted) {
-        setNativeTracks(files.map((file, index) => toAppTrack(file, index)));
+        const tracks = files.map((file, index) => toAppTrack(file, index));
+        setNativeTracks(tracks);
+        onNativeTracksChange?.(tracks);
         setPlaylists(storedPlaylists);
       }
     }).catch((error: unknown) => {
       console.error('[MPlayer] Native library initialization failed:', error);
     });
     return () => { mounted = false; };
-  }, []);
+  }, [onNativeTracksChange]);
 
   useEffect(() => {
     if (isNativeRuntime) return;
@@ -137,7 +141,9 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     try {
       const result = await scanNativeMusicFolder();
       if (!result) return;
-      setNativeTracks(result.tracks.map((file, index) => toAppTrack(file, index)));
+      const tracks = result.tracks.map((file, index) => toAppTrack(file, index));
+      setNativeTracks(tracks);
+      onNativeTracksChange?.(tracks);
       setSelectedPlaylistId(null);
       setSyncToast(
         result.truncated
