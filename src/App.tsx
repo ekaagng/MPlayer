@@ -173,7 +173,6 @@ export default function App() {
           <OutputSettingsView
             settings={outputSettings}
             onUpdateSettings={setOutputSettings}
-            isBitPerfect={false}
           />
         )}
       </main>
