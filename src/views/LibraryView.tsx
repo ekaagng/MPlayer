@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Track, Playlist } from '../types/audio';
 import { MOCK_TRACKS, INITIAL_PLAYLISTS } from '../data/mockTracks';
 
@@ -15,7 +15,34 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFormatFilter, setActiveFormatFilter] = useState<string>('ALL');
-  const [playlists, setPlaylists] = useState<Playlist[]>(INITIAL_PLAYLISTS);
+  const [playlists, setPlaylists] = useState<Playlist[]>(() => {
+    try {
+      const stored = window.localStorage.getItem('mplayer:playlists');
+      if (stored) {
+        const parsed = JSON.parse(stored) as Playlist[];
+        if (Array.isArray(parsed)) {
+          return parsed.map((playlist) => ({
+            ...playlist,
+            trackIds: Array.isArray(playlist.trackIds) ? [...new Set(playlist.trackIds)] : [],
+            trackCount: Array.isArray(playlist.trackIds) ? new Set(playlist.trackIds).size : 0,
+          }));
+        }
+      }
+    } catch {
+      // Ignore unavailable or malformed browser storage and use an empty demo library.
+    }
+    return INITIAL_PLAYLISTS.map((playlist) => ({
+      ...playlist,
+      trackIds: [],
+      trackCount: 0,
+      subtitle: '0 lagu',
+    }));
+  });
+  const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(null);
+  const [trackToAdd, setTrackToAdd] = useState<Track | null>(null);
+  const [playlistEditor, setPlaylistEditor] = useState<Playlist | null>(null);
+  const [playlistName, setPlaylistName] = useState('');
+  const [playlistToDelete, setPlaylistToDelete] = useState<Playlist | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncToast, setSyncToast] = useState<string | null>(null);
   const [swipedItemRestored, setSwipedItemRestored] = useState(false);
@@ -23,8 +50,16 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const [showChecksumModal, setShowChecksumModal] = useState(false);
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('mplayer:playlists', JSON.stringify(playlists));
+    } catch {
+      setSyncToast('Playlist tidak dapat disimpan di penyimpanan browser ini.');
+    }
+  }, [playlists]);
+
   const filterChips = [
-    { id: 'ALL', label: 'Semua Lagu (18,420)' },
+    { id: 'ALL', label: `Semua Lagu (${MOCK_TRACKS.length})` },
     { id: 'FLAC', label: 'FLAC Lossless' },
     { id: 'WAV', label: 'WAV Raw' },
     { id: 'HI-RES', label: 'Hi-Res >96kHz' },
@@ -54,18 +89,80 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     setIsSyncing(true);
     setTimeout(() => {
       setIsSyncing(false);
-      setSyncToast('Sinkronisasi selesai: 18.420 lagu siap diputar.');
+      setSyncToast('Daftar demo diperbarui. Pemindaian folder asli belum tersedia di preview web.');
       setTimeout(() => setSyncToast(null), 3000);
     }, 600);
   };
 
-  const handleAddToPlaylist = (playlistId: string) => {
+  const handleAddToPlaylist = (playlistId: string, track: Track) => {
+    let wasDuplicate = false;
     setPlaylists((prev) =>
-      prev.map((p) =>
-        p.id === playlistId ? { ...p, trackCount: p.trackCount + 1 } : p
-      )
+      prev.map((playlist) => {
+        if (playlist.id !== playlistId) return playlist;
+        const trackIds = playlist.trackIds ?? [];
+        if (trackIds.includes(track.id)) {
+          wasDuplicate = true;
+          return playlist;
+        }
+        const nextTrackIds = [...trackIds, track.id];
+        return {
+          ...playlist,
+          trackIds: nextTrackIds,
+          trackCount: nextTrackIds.length,
+          subtitle: `${nextTrackIds.length} lagu`,
+        };
+      })
     );
-    setSyncToast('Lagu berhasil ditambahkan ke playlist pilihan!');
+    setSelectedPlaylistId(playlistId);
+    setTrackToAdd(null);
+    setSyncToast(wasDuplicate
+      ? 'Lagu ini sudah ada di playlist tersebut.'
+      : 'Lagu ditambahkan ke playlist.');
+    setTimeout(() => setSyncToast(null), 3000);
+  };
+
+  const handleSavePlaylist = () => {
+    const title = playlistName.trim();
+    if (!title) {
+      setSyncToast('Nama playlist tidak boleh kosong.');
+      return;
+    }
+    const duplicateName = playlists.some((playlist) =>
+      playlist.title.toLocaleLowerCase() === title.toLocaleLowerCase() &&
+      playlist.id !== playlistEditor?.id
+    );
+    if (duplicateName) {
+      setSyncToast('Nama playlist tersebut sudah digunakan.');
+      return;
+    }
+
+    if (playlistEditor) {
+      setPlaylists((prev) => prev.map((playlist) =>
+        playlist.id === playlistEditor.id ? { ...playlist, title } : playlist
+      ));
+    } else {
+      const newPlaylist: Playlist = {
+        id: `playlist-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        title,
+        trackCount: 0,
+        trackIds: [],
+        subtitle: '0 lagu',
+      };
+      setPlaylists((prev) => [...prev, newPlaylist]);
+      setSelectedPlaylistId(newPlaylist.id);
+    }
+    setPlaylistEditor(null);
+    setPlaylistName('');
+    setSyncToast(playlistEditor ? 'Nama playlist diperbarui.' : 'Playlist berhasil dibuat.');
+    setTimeout(() => setSyncToast(null), 3000);
+  };
+
+  const handleDeletePlaylist = () => {
+    if (!playlistToDelete) return;
+    setPlaylists((prev) => prev.filter((playlist) => playlist.id !== playlistToDelete.id));
+    if (selectedPlaylistId === playlistToDelete.id) setSelectedPlaylistId(null);
+    setSyncToast(`Playlist "${playlistToDelete.title}" dihapus.`);
+    setPlaylistToDelete(null);
     setTimeout(() => setSyncToast(null), 3000);
   };
 
@@ -248,38 +345,65 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               {playlists.map((pl) => (
                 <div
                   key={pl.id}
-                  onClick={() => handleAddToPlaylist(pl.id)}
-                  className={`p-2.5 cursor-pointer transition-all border border-outline ${
-                    pl.isDropZone
+                  onClick={() => setSelectedPlaylistId(pl.id)}
+                  className={`p-2.5 transition-all border border-outline ${
+                    selectedPlaylistId === pl.id
                       ? 'bg-primary-container text-on-primary-container shadow-[2px_2px_0px_#1a1a1a]'
                       : 'bg-surface hover:bg-surface-container-high text-on-surface shadow-[1px_1px_0px_#1a1a1a]'
                   }`}
-                  title="Klik untuk menambahkan lagu aktif ke playlist ini"
                 >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1.5 min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedPlaylistId(pl.id)}
+                      className="flex items-center gap-1.5 min-w-0 text-left flex-1"
+                      aria-pressed={selectedPlaylistId === pl.id}
+                      title={`Pilih playlist ${pl.title}`}
+                    >
                       <span className="material-symbols-outlined text-[18px]">
                         {pl.isDropZone ? 'queue_music' : 'album'}
                       </span>
                       <span className="font-headline font-bold text-xs uppercase truncate">{pl.title}</span>
-                    </div>
-                    <span className="font-mono text-[10px] font-bold shrink-0">{pl.trackCount}</span>
+                    </button>
+                    <span className="font-mono text-[10px] font-bold shrink-0">{(pl.trackIds ?? []).length}</span>
+                  </div>
+                  <div className="mt-2 flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setPlaylistEditor(pl);
+                        setPlaylistName(pl.title);
+                      }}
+                      className="flex-1 px-2 py-1 text-[10px] font-bold uppercase border border-outline/40 hover:bg-surface-container"
+                      aria-label={`Edit playlist ${pl.title}`}
+                    >
+                      Edit nama
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setPlaylistToDelete(pl);
+                      }}
+                      className="px-2 py-1 text-[10px] font-bold uppercase border border-outline/40 hover:bg-secondary hover:text-white"
+                      aria-label={`Hapus playlist ${pl.title}`}
+                    >
+                      Hapus
+                    </button>
                   </div>
                 </div>
               ))}
 
               <button
                 onClick={() => {
-                  const newName = `Koleksi #${playlists.length + 1}`;
-                  setPlaylists((prev) => [
-                    ...prev,
-                    { id: `p-${Date.now()}`, title: newName, trackCount: 0, subtitle: 'Lossless' },
-                  ]);
-                }}
+                  setPlaylistEditor(null);
+                  setPlaylistName('');
+                }
                 className="w-full py-2 px-2.5 bg-surface-container hover:bg-surface-container-high text-on-surface font-headline text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors border border-outline cursor-pointer mt-1"
               >
                 <span className="material-symbols-outlined text-[16px]">add</span>
-                <span>+ Buat Playlist Baru</span>
+                <span onClick={() => { setPlaylistEditor(null); setPlaylistName(''); }}>+ Buat Playlist Baru</span>
               </button>
             </div>
           </div>
@@ -313,6 +437,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                     <th className="py-2.5 px-3">Format</th>
                     <th className="py-2.5 px-3 hidden sm:table-cell">Bitrate</th>
                     <th className="py-2.5 px-3 text-right">Durasi</th>
+                    <th className="py-2.5 px-3 text-center">Playlist</th>
                     <th className="py-2.5 px-3 text-center">Putar</th>
                   </tr>
                 </thead>
@@ -365,6 +490,19 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                           </td>
                           <td className="py-3 px-3 text-right font-mono font-bold text-on-surface">
                             {track.durationFormatted}
+                          </td>
+                          <td className="py-3 px-3 text-center">
+                            <button
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setTrackToAdd(track);
+                              }}
+                              className="w-7 h-7 border border-outline hover:bg-primary hover:text-white"
+                              title={`Tambahkan ${track.title} ke playlist`}
+                              aria-label={`Tambahkan ${track.title} ke playlist`}
+                            >
+                              <span className="material-symbols-outlined text-[16px]">playlist_add</span>
+                            </button>
                           </td>
                           <td className="py-3 px-3 text-center">
                             <button
@@ -433,6 +571,19 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                         </td>
                         <td className="py-3 px-3 text-center">
                           <button
+                            aria-label={`Tambahkan ${track.title} ke playlist`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setTrackToAdd(track);
+                            }}
+                            className="w-7 h-7 border border-outline hover:bg-primary hover:text-white"
+                            title={`Tambahkan ${track.title} ke playlist`}
+                          >
+                            <span className="material-symbols-outlined text-[16px]">playlist_add</span>
+                          </button>
+                        </td>
+                        <td className="py-3 px-3 text-center">
+                          <button
                             aria-label={`Putar ${track.title}`}
                             onClick={(e) => {
                               e.stopPropagation();
@@ -476,6 +627,77 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           </div>
         </div>
       </div>
+
+
+      {trackToAdd && (
+        <div className="fixed inset-0 bg-primary/70 backdrop-blur-sm z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Tambahkan lagu ke playlist">
+          <div className="bg-surface-bright border-2 border-outline shadow-[6px_6px_0px_#1a1a1a] p-5 max-w-md w-full flex flex-col gap-3">
+            <div className="flex items-start justify-between gap-3 border-b-2 border-outline pb-2">
+              <div>
+                <h3 className="font-headline font-bold text-base uppercase">Tambahkan ke playlist</h3>
+                <p className="text-xs text-on-surface-variant mt-1">{trackToAdd.title} — {trackToAdd.artist}</p>
+              </div>
+              <button type="button" onClick={() => setTrackToAdd(null)} aria-label="Tutup" className="p-1 hover:bg-surface-container">
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+            {playlists.length === 0 ? (
+              <p className="text-sm text-on-surface-variant">Belum ada playlist. Buat playlist terlebih dahulu.</p>
+            ) : (
+              <div className="flex flex-col gap-2 max-h-64 overflow-y-auto">
+                {playlists.map((playlist) => {
+                  const alreadyAdded = (playlist.trackIds ?? []).includes(trackToAdd.id);
+                  return (
+                    <button
+                      key={playlist.id}
+                      type="button"
+                      disabled={alreadyAdded}
+                      onClick={() => handleAddToPlaylist(playlist.id, trackToAdd)}
+                      className="flex items-center justify-between gap-3 px-3 py-2 border border-outline text-left hover:bg-primary-container disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      <span className="text-sm font-semibold">{playlist.title}</span>
+                      <span className="text-xs font-mono">{alreadyAdded ? 'Sudah ada' : `${(playlist.trackIds ?? []).length} lagu · Tambahkan`}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            <div className="flex justify-end">
+              <button type="button" onClick={() => setTrackToAdd(null)} className="px-4 py-2 border border-outline text-xs font-bold uppercase">Tutup</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {playlistEditor !== null || playlistName === '' && selectedPlaylistId === '__create__' ? (
+        <div className="fixed inset-0 bg-primary/70 backdrop-blur-sm z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Edit playlist">
+          <form
+            className="bg-surface-bright border-2 border-outline shadow-[6px_6px_0px_#1a1a1a] p-5 max-w-md w-full flex flex-col gap-4"
+            onSubmit={(event) => { event.preventDefault(); handleSavePlaylist(); }}
+          >
+            <h3 className="font-headline font-bold text-base uppercase">{playlistEditor ? 'Edit nama playlist' : 'Buat playlist baru'}</h3>
+            <label className="text-xs font-bold" htmlFor="playlist-name">Nama playlist</label>
+            <input id="playlist-name" autoFocus value={playlistName} onChange={(event) => setPlaylistName(event.target.value)} maxLength={80} className="w-full bg-surface-container px-3 py-2 text-sm border-2 border-outline" placeholder="Contoh: Jazz Malam" />
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => { setPlaylistEditor(null); setPlaylistName(''); setSelectedPlaylistId((id) => id === '__create__' ? null : id); }} className="px-4 py-2 border border-outline text-xs font-bold uppercase">Batal</button>
+              <button type="submit" className="px-4 py-2 bg-primary text-on-primary border border-outline text-xs font-bold uppercase">Simpan</button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
+      {playlistToDelete && (
+        <div className="fixed inset-0 bg-primary/70 backdrop-blur-sm z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Konfirmasi hapus playlist">
+          <div className="bg-surface-bright border-2 border-outline p-5 max-w-md w-full flex flex-col gap-3">
+            <h3 className="font-headline font-bold text-base uppercase">Hapus playlist?</h3>
+            <p className="text-sm text-on-surface-variant">Playlist "{playlistToDelete.title}" akan dihapus. File musik tidak akan dihapus.</p>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setPlaylistToDelete(null)} className="px-4 py-2 border border-outline text-xs font-bold uppercase">Batal</button>
+              <button type="button" onClick={handleDeletePlaylist} className="px-4 py-2 bg-secondary text-white border border-outline text-xs font-bold uppercase">Hapus playlist</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal: Add Folder */}
       {showAddFolderModal && (
