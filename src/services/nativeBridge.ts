@@ -13,9 +13,15 @@ export interface NativeTrackFile {
   id: number;
   path: string;
   title: string;
+  artist: string;
+  album: string;
   format: string;
   sizeBytes: number;
   modifiedAt: number | null;
+  durationMs: number | null;
+  sampleRateHz: number | null;
+  bitDepth: number | null;
+  bitrateBps: number | null;
 }
 
 export interface NativeScanResult {
@@ -151,20 +157,34 @@ export function toAppTrack(file: NativeTrackFile, index = 0): Track {
       ? extension as Track['format']
       : 'UNKNOWN');
 
+  const durationMs = Math.max(0, file.durationMs ?? 0);
+  const sampleRateHz = Math.max(0, file.sampleRateHz ?? 0);
+  const bitDepth = file.bitDepth ?? 0;
+  const bitrateBps = Math.max(0, file.bitrateBps ?? 0);
+  const sampleRate = sampleRateHz >= 1_000_000
+    ? `${(sampleRateHz / 1_000_000).toFixed(1).replace(/\\.0$/, '')}MHz`
+    : sampleRateHz > 0
+      ? `${(sampleRateHz / 1000).toFixed(sampleRateHz % 1000 === 0 ? 0 : 1)}kHz`
+      : 'Metadata belum dibaca';
+  const totalSeconds = Math.floor(durationMs / 1000);
+  const durationFormatted = durationMs > 0
+    ? `${String(Math.floor(totalSeconds / 60)).padStart(2, '0')}:${String(totalSeconds % 60).padStart(2, '0')}.${String(Math.floor((durationMs % 1000) / 10)).padStart(2, '0')}`
+    : '--:--';
+
   return {
     id: `native-${file.id}`,
     trackNumber: String(index + 1).padStart(2, '0'),
     title: file.title,
-    artist: '',
-    album: '',
+    artist: file.artist?.trim() ?? '',
+    album: file.album?.trim() ?? '',
     format,
-    sampleRate: 'Belum dibaca',
-    sampleRateNum: 0,
-    bitDepth: 'Belum dibaca',
-    bitrate: 'Metadata belum dibaca',
+    sampleRate,
+    sampleRateNum: sampleRateHz,
+    bitDepth: bitDepth > 0 ? `${bitDepth}-bit` : 'Metadata belum dibaca',
+    bitrate: bitrateBps > 0 ? `${Math.round(bitrateBps / 1000).toLocaleString('en-US')} kbps` : 'Metadata belum dibaca',
     sizeMB: file.sizeBytes / (1024 * 1024),
-    duration: 0,
-    durationFormatted: '--:--',
+    duration: durationMs / 1000,
+    durationFormatted,
     inodePath: file.path,
     year: 0,
     coverUrl: '',
