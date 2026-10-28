@@ -1163,10 +1163,11 @@ mod tests {
         add_track_to_playlist_in_db, apply_scan_results, create_playlist_in_db,
         delete_playlist_in_db, get_lyrics_from_db, initialize_database, list_playlists_from_db,
         list_tracks_from_db, open_database, rename_playlist_in_db, save_lyrics_to_db,
-        supported_audio_file, ScannedFile, AUDIO_EXTENSIONS,
+        supported_audio_file, NativeEqualizerSettings, NativeEqualizerSource, SharedEqualizer,
+        ScannedFile, AUDIO_EXTENSIONS,
     };
     use rusqlite::Connection;
-    use std::{fs, path::Path, time::{SystemTime, UNIX_EPOCH}};
+    use std::{fs, path::Path, sync::Arc, time::{SystemTime, UNIX_EPOCH}};
 
     #[test]
     fn accepts_supported_extensions_case_insensitively() {
@@ -1215,6 +1216,66 @@ mod tests {
     fn auto_preamp_accounts_for_positive_equalizer_boosts() {
         let settings = super::NativeEqualizerSettings::default();
         assert!((settings.effective_preamp_db() - (-5.0)).abs() < 0.001);
+    }
+
+    #[test]
+    fn disabled_native_equalizer_is_an_exact_passthrough() {
+        let input = vec![0.25_f32, -0.125, 0.5, -0.5, 0.0, 0.75];
+        let source = rodio::buffer::SamplesBuffer::new(2, 48_000, input.clone());
+        let settings = NativeEqualizerSettings {
+            enabled: false,
+            ..NativeEqualizerSettings::default()
+        };
+        let shared = Arc::new(SharedEqualizer::new(settings));
+        let output = NativeEqualizerSource::new(source, shared).collect::<Vec<_>>();
+        assert_eq!(output, input);
+    }
+
+    #[test]
+    fn native_equalizer_applies_preamp_to_playback_samples() {
+        let input = vec![0.25_f32; 512];
+        let source = rodio::buffer::SamplesBuffer::new(1, 44_100, input);
+        let settings = NativeEqualizerSettings {
+            enabled: true,
+            preamp_db: -6.0,
+            auto_preamp: false,
+            bands_db: [0.0; 10],
+        };
+        let shared = Arc::new(SharedEqualizer::new(settings));
+        let output = NativeEqualizerSource::new(source, shared).collect::<Vec<_>>();
+        let expected = 0.25_f32 * 10.0_f32.powf(-6.0 / 20.0);
+        for sample in output.iter().skip(10) {
+            assert!((sample - expected).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn native_equalizer_updates_without_recreating_the_source() {
+        use std::sync::atomic::Ordering;
+
+        let input = vec![0.25_f32; 64];
+        let source = rodio::buffer::SamplesBuffer::new(1, 44_100, input);
+        let shared = Arc::new(SharedEqualizer::new(NativeEqualizerSettings {
+            enabled: false,
+            ..NativeEqualizerSettings::default()
+        }));
+        let mut source = NativeEqualizerSource::new(source, Arc::clone(&shared));
+
+        assert_eq!(source.next(), Some(0.25));
+        {
+            let mut settings = shared.settings.write().expect("settings lock should work");
+            *settings = NativeEqualizerSettings {
+                enabled: true,
+                preamp_db: -6.0,
+                auto_preamp: false,
+                bands_db: [0.0; 10],
+            };
+        }
+        shared.generation.fetch_add(1, Ordering::Release);
+
+        let updated = source.next().expect("source should contain more samples");
+        let expected = 0.25_f32 * 10.0_f32.powf(-6.0 / 20.0);
+        assert!((updated - expected).abs() < 1e-5);
     }
 
     #[test]
