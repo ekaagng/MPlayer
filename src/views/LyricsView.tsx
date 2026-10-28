@@ -210,8 +210,8 @@ export const LyricsView: React.FC<LyricsViewProps> = ({
             LRC
           </div>
           <div>
-            <div className="flex items-center gap-2">
-              <span className="font-headline font-bold text-sm text-on-surface uppercase">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <span className="min-w-0 break-words font-headline font-bold text-sm text-on-surface uppercase">
                 {currentTrack?.title || 'Belum ada lagu dipilih'}
               </span>
               <span className="text-[10px] font-mono font-bold bg-primary-container px-1.5 py-0.2 border border-outline">
@@ -335,7 +335,7 @@ export const LyricsView: React.FC<LyricsViewProps> = ({
               </button>
               <button
                 onClick={() => handleShiftOffset(100)}
-                className="px-2 py-1 bg-surface-bright hover:bg-primary hover:text-white border border-outline text-[11px] font-mono font-bold cursor-pointer"
+                className="min-h-9 rounded-md border border-outline bg-surface-bright px-3 py-1 text-[11px] font-mono font-bold hover:bg-primary hover:text-white"
               >
                 +100ms
               </button>
