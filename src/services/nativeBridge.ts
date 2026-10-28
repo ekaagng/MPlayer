@@ -1,0 +1,172 @@
+import { invoke, isTauri } from '@tauri-apps/api/core';
+import { open } from '@tauri-apps/plugin-dialog';
+import type { Playlist, Track } from '../types/audio';
+
+export interface NativeRuntimeInfo {
+  platform: string;
+  nativeAudio: boolean;
+  folderScanning: boolean;
+  database: string;
+}
+
+export interface NativeTrackFile {
+  id: number;
+  path: string;
+  title: string;
+  format: string;
+  sizeBytes: number;
+  modifiedAt: number | null;
+}
+
+export interface NativeScanResult {
+  tracks: NativeTrackFile[];
+  truncated: boolean;
+  scannedFolder: string;
+}
+
+export interface NativePlaylistRecord {
+  id: number;
+  name: string;
+  trackIds: number[];
+}
+
+export interface NativePlaybackSnapshot {
+  path: string | null;
+  isPlaying: boolean;
+  currentTimeMs: number;
+  durationMs: number;
+  volume: number;
+}
+
+export async function listNativePlaylists(): Promise<Playlist[]> {
+  if (!isTauri()) return [];
+  const playlists = await invoke<NativePlaylistRecord[]>('native_list_playlists');
+  return playlists.map(toAppPlaylist);
+}
+
+export async function createNativePlaylist(name: string): Promise<Playlist> {
+  requireNativeRuntime();
+  return toAppPlaylist(await invoke<NativePlaylistRecord>('native_create_playlist', { name }));
+}
+
+export async function renameNativePlaylist(id: string, name: string): Promise<Playlist> {
+  requireNativeRuntime();
+  const playlistId = parseNativePlaylistId(id);
+  return toAppPlaylist(await invoke<NativePlaylistRecord>('native_rename_playlist', { playlistId, name }));
+}
+
+export async function deleteNativePlaylist(id: string): Promise<void> {
+  requireNativeRuntime();
+  const playlistId = parseNativePlaylistId(id);
+  await invoke('native_delete_playlist', { playlistId });
+}
+
+export async function addNativeTrackToPlaylist(playlistId: string, trackId: string): Promise<Playlist> {
+  requireNativeRuntime();
+  const nativePlaylistId = parseNativePlaylistId(playlistId);
+  const nativeTrackId = parseNativeTrackId(trackId);
+  return toAppPlaylist(await invoke<NativePlaylistRecord>('native_add_track_to_playlist', {
+    playlistId: nativePlaylistId,
+    trackId: nativeTrackId,
+  }));
+}
+
+export async function getNativeLyrics(trackId: string): Promise<string | null> {
+  requireNativeRuntime();
+  const nativeTrackId = parseNativeTrackId(trackId);
+  return invoke<string | null>('native_get_lyrics', { trackId: nativeTrackId });
+}
+
+export async function saveNativeLyrics(trackId: string, lrcText: string): Promise<void> {
+  requireNativeRuntime();
+  const nativeTrackId = parseNativeTrackId(trackId);
+  await invoke('native_save_lyrics', { trackId: nativeTrackId, lrcText });
+}
+
+export function toAppPlaylist(playlist: NativePlaylistRecord): Playlist {
+  const trackIds = playlist.trackIds.map((id) => `native-${id}`);
+  return {
+    id: `native-playlist-${playlist.id}`,
+    title: playlist.name,
+    trackCount: trackIds.length,
+    trackIds,
+    subtitle: `${trackIds.length} lagu`,
+    isDropZone: false,
+  };
+}
+
+function requireNativeRuntime(): void {
+  if (!isTauri()) throw new Error('Operasi ini hanya tersedia di aplikasi native.');
+}
+
+function parseNativePlaylistId(id: string): number {
+  const match = /^native-playlist-(\d+)$/.exec(id);
+  const parsed = match ? Number(match[1]) : NaN;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error('ID playlist native tidak valid.');
+  return parsed;
+}
+
+function parseNativeTrackId(id: string): number {
+  const match = /^native-(\d+)$/.exec(id);
+  const parsed = match ? Number(match[1]) : NaN;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error('ID track native tidak valid.');
+  return parsed;
+}
+
+/** Returns null in a normal browser preview. */
+export async function getNativeRuntimeInfo(): Promise<NativeRuntimeInfo | null> {
+  if (!isTauri()) return null;
+  return invoke<NativeRuntimeInfo>('native_runtime_info');
+}
+
+export async function listNativeTracks(): Promise<NativeTrackFile[]> {
+  if (!isTauri()) return [];
+  return invoke<NativeTrackFile[]>('native_list_tracks');
+}
+
+/** The folder picker is desktop-only; mobile needs SAF / Files document-picker integration. */
+export async function scanNativeMusicFolder(): Promise<NativeScanResult | null> {
+  if (!isTauri()) return null;
+
+  const runtime = await getNativeRuntimeInfo();
+  if (!runtime?.folderScanning) {
+    throw new Error('Pemilihan folder penuh belum didukung di Android/iOS. Integrasi document picker mobile masih diperlukan.');
+  }
+
+  const selected = await open({
+    title: 'Pilih folder musik',
+    directory: true,
+    multiple: false,
+  });
+
+  if (typeof selected !== 'string' || selected.length === 0) return null;
+  return invoke<NativeScanResult>('native_scan_music_directory', { path: selected });
+}
+
+export function toAppTrack(file: NativeTrackFile, index = 0): Track {
+  const extension = file.format.toUpperCase();
+  const format: Track['format'] = ['DSF', 'DFF'].includes(extension)
+    ? 'DSD'
+    : (['FLAC', 'WAV', 'MP3', 'MQA', 'AAC', 'ALAC', 'OGG', 'OPUS', 'AIFF', 'M4A'].includes(extension)
+      ? extension as Track['format']
+      : 'UNKNOWN');
+
+  return {
+    id: `native-${file.id}`,
+    trackNumber: String(index + 1).padStart(2, '0'),
+    title: file.title,
+    artist: '',
+    album: '',
+    format,
+    sampleRate: 'Belum dibaca',
+    sampleRateNum: 0,
+    bitDepth: 'Belum dibaca',
+    bitrate: 'Metadata belum dibaca',
+    sizeMB: file.sizeBytes / (1024 * 1024),
+    duration: 0,
+    durationFormatted: '--:--',
+    inodePath: file.path,
+    year: 0,
+    coverUrl: '',
+  };
+}

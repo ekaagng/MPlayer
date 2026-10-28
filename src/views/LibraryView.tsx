@@ -1,6 +1,18 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { isTauri } from '@tauri-apps/api/core';
 import { Track, Playlist } from '../types/audio';
 import { MOCK_TRACKS, INITIAL_PLAYLISTS } from '../data/mockTracks';
+import {
+  addNativeTrackToPlaylist,
+  createNativePlaylist,
+  deleteNativePlaylist,
+  getNativeRuntimeInfo,
+  listNativePlaylists,
+  listNativeTracks,
+  renameNativePlaylist,
+  scanNativeMusicFolder,
+  toAppTrack,
+} from '../services/nativeBridge';
 
 interface LibraryViewProps {
   currentTrack: Track | null;
@@ -14,8 +26,11 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   onPlayTrack,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const [isNativeRuntime, setIsNativeRuntime] = useState(() => isTauri());
+  const [nativeTracks, setNativeTracks] = useState<Track[]>([]);
   const [activeFormatFilter, setActiveFormatFilter] = useState<string>('ALL');
   const [playlists, setPlaylists] = useState<Playlist[]>(() => {
+    if (isTauri()) return [];
     try {
       const stored = window.localStorage.getItem('mplayer:playlists');
       if (stored) {
@@ -51,15 +66,35 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
 
   useEffect(() => {
+    let mounted = true;
+    void getNativeRuntimeInfo().then(async (runtime) => {
+      if (!runtime || !mounted) return;
+      setIsNativeRuntime(true);
+      const [files, storedPlaylists] = await Promise.all([
+        listNativeTracks(),
+        listNativePlaylists(),
+      ]);
+      if (mounted) {
+        setNativeTracks(files.map((file, index) => toAppTrack(file, index)));
+        setPlaylists(storedPlaylists);
+      }
+    }).catch((error: unknown) => {
+      console.error('[MPlayer] Native library initialization failed:', error);
+    });
+    return () => { mounted = false; };
+  }, []);
+
+  useEffect(() => {
+    if (isNativeRuntime) return;
     try {
       window.localStorage.setItem('mplayer:playlists', JSON.stringify(playlists));
     } catch {
       setSyncToast('Playlist tidak dapat disimpan di penyimpanan browser ini.');
     }
-  }, [playlists]);
+  }, [playlists, isNativeRuntime]);
 
   const filterChips = [
-    { id: 'ALL', label: `Semua Lagu (${MOCK_TRACKS.length})` },
+    { id: 'ALL', label: `Semua Lagu (${isNativeRuntime ? nativeTracks.length : MOCK_TRACKS.length})` },
     { id: 'FLAC', label: 'FLAC Lossless' },
     { id: 'WAV', label: 'WAV Raw' },
     { id: 'HI-RES', label: 'Hi-Res >96kHz' },
@@ -68,10 +103,12 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   ];
 
   const filteredTracks = useMemo(() => {
-    return MOCK_TRACKS.filter((track) => {
+    const sourceTracks = isNativeRuntime ? nativeTracks : MOCK_TRACKS;
+    return sourceTracks.filter((track) => {
       if (activeFormatFilter === 'FLAC' && track.format !== 'FLAC') return false;
       if (activeFormatFilter === 'WAV' && track.format !== 'WAV') return false;
       if (activeFormatFilter === 'DSD' && track.format !== 'DSD') return false;
+      if (activeFormatFilter === 'MP3' && track.format !== 'MP3') return false;
       if (activeFormatFilter === 'HI-RES' && !track.sampleRate.includes('192') && !track.sampleRate.includes('5.6M')) return false;
 
       if (!searchQuery.trim()) return true;
@@ -83,32 +120,76 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         track.format.toLowerCase().includes(q)
       );
     });
-  }, [searchQuery, activeFormatFilter]);
+  }, [searchQuery, activeFormatFilter, isNativeRuntime, nativeTracks]);
 
   const selectedPlaylist = playlists.find((playlist) => playlist.id === selectedPlaylistId) ?? null;
   const displayedTracks = selectedPlaylist
     ? filteredTracks.filter((track) => (selectedPlaylist.trackIds ?? []).includes(track.id))
     : filteredTracks;
 
-  const handleSync = () => {
+  const handleAddFolder = async () => {
+    if (!isNativeRuntime) {
+      setShowAddFolderModal(true);
+      return;
+    }
+
     setIsSyncing(true);
-    setTimeout(() => {
+    try {
+      const result = await scanNativeMusicFolder();
+      if (!result) return;
+      setNativeTracks(result.tracks.map((file, index) => toAppTrack(file, index)));
+      setSelectedPlaylistId(null);
+      setSyncToast(
+        result.truncated
+          ? `Pemindaian dibatasi hingga 20.000 file. ${result.tracks.length} lagu terindeks.`
+          : `Pemindaian selesai: ${result.tracks.length} file audio terindeks ke SQLite lokal.`
+      );
+      window.setTimeout(() => setSyncToast(null), 4500);
+    } catch (error) {
+      setSyncToast(error instanceof Error ? error.message : 'Pemindaian folder gagal.');
+    } finally {
       setIsSyncing(false);
-      setSyncToast('Daftar demo diperbarui. Pemindaian folder asli belum tersedia di preview web.');
-      setTimeout(() => setSyncToast(null), 3000);
+    }
+  };
+
+  const handleSync = () => {
+    if (isNativeRuntime) {
+      void handleAddFolder();
+      return;
+    }
+    setIsSyncing(true);
+    window.setTimeout(() => {
+      setIsSyncing(false);
+      setSyncToast('Daftar demo diperbarui. Pemindaian folder asli hanya tersedia di aplikasi native.');
+      window.setTimeout(() => setSyncToast(null), 3000);
     }, 600);
   };
 
-  const handleAddToPlaylist = (playlistId: string, track: Track) => {
+  const handleAddToPlaylist = async (playlistId: string, track: Track) => {
     const target = playlists.find((playlist) => playlist.id === playlistId);
     if (!target) return;
     const currentTrackIds = target.trackIds ?? [];
     if (currentTrackIds.includes(track.id)) {
       setSyncToast('Lagu ini sudah ada di playlist tersebut.');
       setTrackToAdd(null);
-      setTimeout(() => setSyncToast(null), 3000);
+      window.setTimeout(() => setSyncToast(null), 3000);
       return;
     }
+
+    if (isNativeRuntime) {
+      try {
+        const updated = await addNativeTrackToPlaylist(playlistId, track.id);
+        setPlaylists((prev) => prev.map((playlist) => playlist.id === updated.id ? updated : playlist));
+        setSelectedPlaylistId(updated.id);
+        setTrackToAdd(null);
+        setSyncToast('Lagu ditambahkan ke playlist SQLite lokal.');
+      } catch (error) {
+        setSyncToast(error instanceof Error ? error.message : 'Lagu gagal ditambahkan ke playlist.');
+      }
+      window.setTimeout(() => setSyncToast(null), 3500);
+      return;
+    }
+
     const nextTrackIds = [...currentTrackIds, track.id];
     setPlaylists((prev) => prev.map((playlist) => playlist.id === playlistId
       ? { ...playlist, trackIds: nextTrackIds, trackCount: nextTrackIds.length, subtitle: `${nextTrackIds.length} lagu` }
@@ -117,10 +198,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     setSelectedPlaylistId(playlistId);
     setTrackToAdd(null);
     setSyncToast('Lagu ditambahkan ke playlist.');
-    setTimeout(() => setSyncToast(null), 3000);
+    window.setTimeout(() => setSyncToast(null), 3000);
   };
 
-  const handleSavePlaylist = () => {
+  const handleSavePlaylist = async () => {
     const title = playlistName.trim();
     if (!title) {
       setSyncToast('Nama playlist tidak boleh kosong.');
@@ -132,6 +213,28 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     );
     if (duplicateName) {
       setSyncToast('Nama playlist tersebut sudah digunakan.');
+      return;
+    }
+
+    if (isNativeRuntime) {
+      try {
+        const updated = playlistEditor
+          ? await renameNativePlaylist(playlistEditor.id, title)
+          : await createNativePlaylist(title);
+        setPlaylists((prev) => playlistEditor
+          ? prev.map((playlist) => playlist.id === updated.id ? updated : playlist)
+          : [...prev, updated]);
+        if (!playlistEditor) setSelectedPlaylistId(updated.id);
+        setPlaylistEditor(null);
+        setIsPlaylistEditorOpen(false);
+        setPlaylistName('');
+        setSyncToast(playlistEditor ? 'Nama playlist diperbarui di SQLite.' : 'Playlist dibuat di SQLite lokal.');
+      } catch (error) {
+        setSyncToast(error instanceof Error ? error.message : 'Perubahan playlist gagal disimpan.');
+        window.setTimeout(() => setSyncToast(null), 3500);
+        return;
+      }
+      window.setTimeout(() => setSyncToast(null), 3000);
       return;
     }
 
@@ -157,8 +260,17 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     setTimeout(() => setSyncToast(null), 3000);
   };
 
-  const handleDeletePlaylist = () => {
+  const handleDeletePlaylist = async () => {
     if (!playlistToDelete) return;
+    if (isNativeRuntime) {
+      try {
+        await deleteNativePlaylist(playlistToDelete.id);
+      } catch (error) {
+        setSyncToast(error instanceof Error ? error.message : 'Playlist gagal dihapus dari SQLite.');
+        window.setTimeout(() => setSyncToast(null), 3500);
+        return;
+      }
+    }
     setPlaylists((prev) => prev.filter((playlist) => playlist.id !== playlistToDelete.id));
     if (selectedPlaylistId === playlistToDelete.id) setSelectedPlaylistId(null);
     setSyncToast(`Playlist "${playlistToDelete.title}" dihapus.`);
@@ -227,7 +339,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             </button>
 
             <button
-              onClick={() => setShowAddFolderModal(true)}
+              onClick={() => { void handleAddFolder(); }}
               className="flex flex-1 items-center justify-center gap-1.5 px-3 py-2 bg-primary-container text-on-primary-container font-headline text-xs font-bold uppercase tracking-wider hover:bg-primary hover:text-on-primary transition-colors shadow-[2px_2px_0px_#1a1a1a] cursor-pointer border-2 border-outline sm:flex-none"
             >
               <span className="material-symbols-outlined text-[18px]">create_new_folder</span>
@@ -276,7 +388,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         <section className="rounded-xl border border-outline/15 bg-surface-bright p-3 text-sm sm:p-4">
           <h2 className="font-headline text-sm font-bold text-on-surface">Status Library Preview</h2>
           <p className="mt-1 text-xs leading-relaxed text-on-surface-variant">
-            Pemindaian folder lokal, pembacaan metadata, checksum, dan database SQLite native belum terhubung. Daftar lagu saat ini menggunakan data contoh; tidak ada klaim indeks atau audit penyimpanan yang dijalankan.
+            {isNativeRuntime ? 'Indeks file audio disimpan di SQLite lokal. Untuk tahap ini judul diambil dari nama file; metadata tag, artwork, durasi lanjutan, playlist SQLite, dan DSP native belum dihubungkan.' : 'Pemindaian folder lokal dan database SQLite native belum tersedia pada preview web. Daftar lagu browser menggunakan data contoh.'}
           </p>
         </section>
       )}
@@ -620,7 +732,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               </div>
               <div className="flex items-center gap-2 text-[10px]">
                 <span className="font-bold text-primary bg-primary-container px-1.5 py-0.5 border border-outline">
-                  Preview · Demo Data
+                  {isNativeRuntime ? 'Library · SQLite Lokal' : 'Preview · Demo Data'}
                 </span>
               </div>
             </div>
@@ -713,13 +825,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               </button>
             </div>
             <p className="text-xs text-on-surface-variant font-body leading-relaxed">
-              Ini adalah preview antarmuka. Pemilihan folder, pemindaian file, dan penyimpanan database native belum diimplementasikan pada versi web ini.
+              Ini adalah preview web. Untuk pemilihan folder dan indeks SQLite, jalankan aplikasi desktop native dengan perintah tauri:dev.
             </p>
             <div className="flex flex-col gap-1.5">
               <label className="text-[10px] font-label font-bold uppercase text-on-surface-variant">Status folder musik</label>
               <input
                 type="text"
-                value="Pemindaian folder native belum tersedia"
+                value="Buka aplikasi desktop native untuk memindai folder"
                 readOnly
                 className="w-full min-w-0 bg-surface-container px-3 py-2 text-xs font-mono border border-outline/15 text-on-surface-variant"
               />

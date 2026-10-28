@@ -1,3 +1,5 @@
+import { invoke, isTauri } from '@tauri-apps/api/core';
+import type { NativePlaybackSnapshot } from './nativeBridge';
 import type { EqualizerState, EQFrequency, Track } from '../types/audio';
 
 export interface AudioTelemetry {
@@ -73,6 +75,10 @@ class AudioEngine {
   private activeSource = '';
   private pendingSeekMs: number | null = null;
   private volume = 0.85;
+  private nativePlayback = false;
+  private nativeCurrentTimeMs = 0;
+  private nativeDurationMs = 0;
+  private nativePollingTimer: number | null = null;
   private sourceOverrides = new Map<string, string>();
   private telemetryListeners = new Set<(telemetry: AudioTelemetry) => void>();
   private trackEndListeners = new Set<() => void>();
@@ -93,6 +99,11 @@ class AudioEngine {
   }
 
   public async playTrack(track: Track, startFromMs = 0): Promise<void> {
+    if (isTauri()) {
+      await this.playNativeTrack(track, startFromMs);
+      return;
+    }
+    this.nativePlayback = false;
     const source = this.sourceOverrides.get(track.id);
     if (!source) {
       throw new Error(
@@ -135,7 +146,29 @@ class AudioEngine {
     this.startTelemetryLoop();
   }
 
+  private async playNativeTrack(track: Track, startFromMs: number): Promise<void> {
+    const snapshot = await invoke<NativePlaybackSnapshot>('native_play_track', {
+      path: track.inodePath,
+      startFromMs: Math.max(0, Math.floor(startFromMs)),
+    });
+    this.nativePlayback = true;
+    this.currentTrack = track;
+    this.nativeCurrentTimeMs = snapshot.currentTimeMs;
+    this.nativeDurationMs = snapshot.durationMs;
+    this.volume = snapshot.volume;
+    this.isPlaying = snapshot.isPlaying;
+    this.emitTelemetry();
+    if (this.isPlaying) this.startTelemetryLoop();
+  }
+
   public pause(): void {
+    if (this.nativePlayback) {
+      void invoke('native_pause').catch((error: unknown) => console.error('[AudioEngine] Native pause failed:', error));
+      this.isPlaying = false;
+      this.stopTelemetryLoop();
+      this.emitTelemetry();
+      return;
+    }
     if (!this.audio || this.audio.paused) {
       this.isPlaying = false;
       this.stopTelemetryLoop();
@@ -156,6 +189,15 @@ class AudioEngine {
   }
 
   public seek(toMs: number): void {
+    if (this.nativePlayback) {
+      const targetMs = Math.max(0, Number.isFinite(toMs) ? Math.floor(toMs) : 0);
+      this.nativeCurrentTimeMs = targetMs;
+      void invoke('native_seek', { positionMs: targetMs }).catch((error: unknown) => {
+        console.error('[AudioEngine] Native seek failed:', error);
+      });
+      this.emitTelemetry();
+      return;
+    }
     const durationMs = this.getDurationMs() || (this.currentTrack?.duration ?? 0) * 1000;
     const targetMs = this.clampPosition(toMs, durationMs);
     this.pendingSeekMs = targetMs;
@@ -172,6 +214,12 @@ class AudioEngine {
 
   public setVolume(volume: number): void {
     this.volume = Math.min(1, Math.max(0, Number.isFinite(volume) ? volume : 0.85));
+    if (this.nativePlayback) {
+      void invoke('native_set_volume', { volume: this.volume }).catch((error: unknown) => {
+        console.error('[AudioEngine] Native volume update failed:', error);
+      });
+      return;
+    }
     if (this.masterGain && this.ctx) {
       this.masterGain.gain.setTargetAtTime(this.volume, this.ctx.currentTime, 0.015);
     } else if (this.audio) {
@@ -196,10 +244,12 @@ class AudioEngine {
   }
 
   public isCurrentlyPlaying(): boolean {
+    if (this.nativePlayback) return this.isPlaying;
     return this.isPlaying && Boolean(this.audio && !this.audio.paused);
   }
 
   public getCurrentPositionMs(): number {
+    if (this.nativePlayback) return this.nativeCurrentTimeMs;
     if (this.audio && Number.isFinite(this.audio.currentTime)) return this.audio.currentTime * 1000;
     return 0;
   }
@@ -312,6 +362,7 @@ class AudioEngine {
   }
 
   private getDurationMs(): number {
+    if (this.nativePlayback) return this.nativeDurationMs || (this.currentTrack?.duration ?? 0) * 1000;
     if (this.audio && Number.isFinite(this.audio.duration) && this.audio.duration > 0) {
       return this.audio.duration * 1000;
     }
@@ -336,6 +387,13 @@ class AudioEngine {
 
   private startTelemetryLoop(): void {
     this.stopTelemetryLoop();
+    if (this.nativePlayback) {
+      this.nativePollingTimer = window.setInterval(() => {
+        void this.refreshNativePlaybackState();
+      }, 250);
+      void this.refreshNativePlaybackState();
+      return;
+    }
     const loop = () => {
       this.emitTelemetry();
       if (this.isPlaying && this.audio && !this.audio.paused) {
@@ -348,6 +406,10 @@ class AudioEngine {
   }
 
   private stopTelemetryLoop(): void {
+    if (this.nativePollingTimer !== null) {
+      window.clearInterval(this.nativePollingTimer);
+      this.nativePollingTimer = null;
+    }
     if (this.animationFrameId !== null) {
       window.cancelAnimationFrame(this.animationFrameId);
       this.animationFrameId = null;
@@ -371,7 +433,42 @@ class AudioEngine {
     };
   }
 
+  private async refreshNativePlaybackState(): Promise<void> {
+    try {
+      const snapshot = await invoke<NativePlaybackSnapshot>('native_playback_state');
+      const wasPlaying = this.isPlaying;
+      this.nativeCurrentTimeMs = Math.max(0, snapshot.currentTimeMs);
+      this.nativeDurationMs = Math.max(0, snapshot.durationMs);
+      this.isPlaying = snapshot.isPlaying;
+      this.emitTelemetry();
+      const reachedEnd = wasPlaying && !snapshot.isPlaying && snapshot.durationMs > 0 &&
+        snapshot.currentTimeMs >= snapshot.durationMs;
+      if (reachedEnd) {
+        this.stopTelemetryLoop();
+        this.trackEndListeners.forEach((listener) => listener());
+      } else if (!snapshot.isPlaying) {
+        this.stopTelemetryLoop();
+      }
+    } catch (error) {
+      console.error('[AudioEngine] Native playback state failed:', error);
+      this.isPlaying = false;
+      this.stopTelemetryLoop();
+      this.emitTelemetry();
+    }
+  }
+
   private createTelemetry(): AudioTelemetry {
+    if (this.nativePlayback) {
+      return {
+        currentTimeMs: this.nativeCurrentTimeMs,
+        durationMs: this.getDurationMs(),
+        rmsLeft: -60,
+        rmsRight: -60,
+        peakLeft: -60,
+        peakRight: -60,
+        frequencyData: new Uint8Array(128),
+      };
+    }
     const frequencyData = this.analyserNode
       ? new Uint8Array(this.analyserNode.frequencyBinCount)
       : new Uint8Array(128);

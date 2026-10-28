@@ -1,4 +1,5 @@
 import React from 'react';
+import { isTauri } from '@tauri-apps/api/core';
 import { Track } from '../types/audio';
 import { formatTimecodeCentiseconds } from '../utils/audioMath';
 
@@ -6,6 +7,9 @@ interface NowPlayingViewProps {
   currentTrack: Track | null;
   isPlaying: boolean;
   currentTimeMs: number;
+  durationMs?: number;
+  isNativeRuntime?: boolean;
+  canNavigate?: boolean;
   playbackError?: string | null;
   onTogglePlay: () => void;
   onPrev: () => void;
@@ -17,6 +21,9 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
   currentTrack,
   isPlaying,
   currentTimeMs,
+  durationMs = 0,
+  isNativeRuntime = isTauri(),
+  canNavigate = true,
   playbackError,
   onTogglePlay,
   onPrev,
@@ -33,7 +40,7 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
     );
   }
 
-  const totalDurationMs = Math.max(0, currentTrack.duration * 1000);
+  const totalDurationMs = Math.max(0, durationMs > 0 ? durationMs : currentTrack.duration * 1000);
   const boundedTimeMs = Math.min(totalDurationMs, Math.max(0, currentTimeMs));
   const progressPercent = totalDurationMs > 0 ? (boundedTimeMs / totalDurationMs) * 100 : 0;
 
@@ -131,7 +138,8 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
               type="button"
               onClick={onPrev}
               aria-label="Lagu sebelumnya"
-              className="flex h-11 w-11 items-center justify-center rounded-full border border-outline/20 text-on-surface transition-colors hover:bg-surface-container active:scale-[0.97]"
+              disabled={!canNavigate}
+              className="flex h-11 w-11 items-center justify-center rounded-full border border-outline/20 text-on-surface transition-colors hover:bg-surface-container active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-35"
             >
               <span className="material-symbols-outlined text-2xl">skip_previous</span>
             </button>
@@ -148,13 +156,16 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
               type="button"
               onClick={onNext}
               aria-label="Lagu berikutnya"
-              className="flex h-11 w-11 items-center justify-center rounded-full border border-outline/20 text-on-surface transition-colors hover:bg-surface-container active:scale-[0.97]"
+              disabled={!canNavigate}
+              className="flex h-11 w-11 items-center justify-center rounded-full border border-outline/20 text-on-surface transition-colors hover:bg-surface-container active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-35"
             >
               <span className="material-symbols-outlined text-2xl">skip_next</span>
             </button>
           </div>
           <p className="text-center text-[11px] leading-relaxed text-on-surface-variant sm:text-left">
-            Preview browser · jalur output native belum terhubung atau terverifikasi
+            {isNativeRuntime
+              ? 'Audio diputar melalui backend native Rust. Output eksklusif, DSP native, dan bit-perfect belum diimplementasikan atau diverifikasi.'
+              : 'Preview browser · pemutaran memakai Web Audio; backend native hanya tersedia saat aplikasi Tauri dijalankan.'}
           </p>
         </div>
       </section>

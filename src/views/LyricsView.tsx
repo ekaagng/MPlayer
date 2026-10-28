@@ -1,18 +1,21 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { LRCLine, Track } from '../types/audio';
 import { formatTimestamp, serializeLrc, parseLrc, shiftTimestamps } from '../utils/lrcParser';
+import { getNativeLyrics, saveNativeLyrics } from '../services/nativeBridge';
 
 interface LyricsViewProps {
   currentTrack: Track | null;
   currentTimeMs: number;
   onSeek: (ms: number) => void;
   onPlayTrack: (track: Track) => void;
+  isNativeRuntime?: boolean;
 }
 
 export const LyricsView: React.FC<LyricsViewProps> = ({
   currentTrack,
   currentTimeMs,
   onSeek,
+  isNativeRuntime = false,
 }) => {
   const [lyricsLines, setLyricsLines] = useState<LRCLine[]>([]);
   const [activeLineIndex, setActiveLineIndex] = useState<number>(-1);
@@ -29,7 +32,7 @@ export const LyricsView: React.FC<LyricsViewProps> = ({
   const syncPercentage = lyricsLines.length === 0 ? 0 : Math.round((syncedCount / lyricsLines.length) * 100);
   const currentTrackId = currentTrack?.id ?? null;
 
-  // Load lyrics per track; browser preview storage is not the native SQLite database.
+  // Native lyrics are stored as LRC text in SQLite; browser preview uses localStorage.
   useEffect(() => {
     if (!currentTrackId || !currentTrack) {
       setLyricsLines([]);
@@ -37,26 +40,52 @@ export const LyricsView: React.FC<LyricsViewProps> = ({
       setStatusMessage('Pilih lagu untuk menambahkan atau menyinkronkan lirik.');
       return;
     }
-    let loadedLines: LRCLine[] = currentTrack.lrcLines ?? [];
-    try {
-      const stored = window.localStorage.getItem(`mplayer:lyrics:${currentTrackId}`);
-      if (stored) {
-        const parsed = JSON.parse(stored) as LRCLine[];
-        if (Array.isArray(parsed) && parsed.every((line) =>
-          typeof line.id === 'string' && typeof line.text === 'string' &&
-          typeof line.timeMs === 'number' && typeof line.synced === 'boolean'
-        )) loadedLines = parsed;
+
+    let cancelled = false;
+    const applyLoadedLines = (loadedLines: LRCLine[], savedMessage?: string) => {
+      if (cancelled) return;
+      const normalizedLines = loadedLines.map((line) => ({
+        ...line,
+        timeFormatted: line.synced ? formatTimestamp(line.timeMs) : '[--:--.--]',
+      }));
+      setLyricsLines(normalizedLines);
+      setActiveLineIndex(normalizedLines.length > 0 ? 0 : -1);
+      setStatusMessage(
+        savedMessage ?? (normalizedLines.length > 0
+          ? (isNativeRuntime ? 'Lirik dimuat dari SQLite lokal.' : 'Lirik lagu dimuat dari penyimpanan browser.')
+          : 'Belum ada lirik untuk lagu ini. Impor file .LRC atau tambahkan lirik.')
+      );
+    };
+
+    if (isNativeRuntime) {
+      void getNativeLyrics(currentTrackId).then((lrcText) => {
+        const loadedLines = lrcText ? parseLrc(lrcText) : (currentTrack.lrcLines ?? []);
+        applyLoadedLines(loadedLines);
+      }).catch((error: unknown) => {
+        applyLoadedLines(currentTrack.lrcLines ?? [], error instanceof Error
+          ? `Lirik SQLite gagal dibaca: ${error.message}`
+          : 'Lirik SQLite gagal dibaca.');
+      });
+    } else {
+      let loadedLines: LRCLine[] = currentTrack.lrcLines ?? [];
+      try {
+        const stored = window.localStorage.getItem(`mplayer:lyrics:${currentTrackId}`);
+        if (stored) {
+          const parsed = JSON.parse(stored) as LRCLine[];
+          if (Array.isArray(parsed) && parsed.every((line) =>
+            typeof line.id === 'string' && typeof line.text === 'string' &&
+            typeof line.timeMs === 'number' && typeof line.synced === 'boolean'
+          )) loadedLines = parsed;
+        }
+      } catch {
+        applyLoadedLines(loadedLines, 'Lirik tersimpan tidak dapat dibaca; menampilkan lirik yang tersedia.');
+        return () => { cancelled = true; };
       }
-    } catch {
-      setStatusMessage('Lirik tersimpan tidak dapat dibaca; memuat lirik dari metadata lagu.');
+      applyLoadedLines(loadedLines);
     }
-    setLyricsLines(loadedLines.map((line) => ({
-      ...line,
-      timeFormatted: line.synced ? formatTimestamp(line.timeMs) : '[--:--.--]',
-    })));
-    setActiveLineIndex(loadedLines.length > 0 ? 0 : -1);
-    setStatusMessage(loadedLines.length > 0 ? 'Lirik lagu dimuat.' : 'Belum ada lirik untuk lagu ini. Impor file .LRC atau tambahkan lirik.');
-  }, [currentTrackId]);
+
+    return () => { cancelled = true; };
+  }, [currentTrackId, isNativeRuntime]);
 
   // Keep the highlighted line tied to the current playback position.
   useEffect(() => {
@@ -117,19 +146,32 @@ export const LyricsView: React.FC<LyricsViewProps> = ({
     setStatusMessage(`Offset waktu diterapkan: ${deltaMs > 0 ? `+${deltaMs}` : deltaMs}ms.`);
   };
 
-  const handleCommitToDb = () => {
+  const handleCommitToDb = async () => {
     if (!currentTrack) {
       setStatusMessage('Pilih lagu sebelum menyimpan lirik.');
       return;
     }
     try {
-      window.localStorage.setItem(`mplayer:lyrics:${currentTrack.id}`, JSON.stringify(lyricsLines));
-      setDbSaved(true);
-      setStatusMessage('Lirik tersimpan di penyimpanan browser lokal. Ini belum tersimpan ke SQLite native.');
-      setTimeout(() => setDbSaved(false), 2500);
-    } catch {
+      if (isNativeRuntime) {
+        const lrcText = serializeLrc({
+          title: currentTrack.title,
+          artist: currentTrack.artist,
+          album: currentTrack.album,
+        }, lyricsLines);
+        await saveNativeLyrics(currentTrack.id, lrcText);
+        setDbSaved(true);
+        setStatusMessage('Lirik tersimpan ke SQLite lokal untuk lagu ini.');
+      } else {
+        window.localStorage.setItem(`mplayer:lyrics:${currentTrack.id}`, JSON.stringify(lyricsLines));
+        setDbSaved(true);
+        setStatusMessage('Lirik tersimpan di penyimpanan browser lokal.');
+      }
+      window.setTimeout(() => setDbSaved(false), 2500);
+    } catch (error) {
       setDbSaved(false);
-      setStatusMessage('Gagal menyimpan lirik ke penyimpanan browser. Periksa ruang penyimpanan.');
+      setStatusMessage(error instanceof Error
+        ? `Gagal menyimpan lirik: ${error.message}`
+        : 'Gagal menyimpan lirik ke penyimpanan lokal.');
     }
   };
 
