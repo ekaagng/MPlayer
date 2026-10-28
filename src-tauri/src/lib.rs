@@ -103,6 +103,8 @@ fn initialize_database(path: &Path) -> Result<(), String> {
                 name TEXT NOT NULL UNIQUE,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_playlists_name_nocase
+                ON playlists(name COLLATE NOCASE);
             CREATE TABLE IF NOT EXISTS playlist_tracks (
                 playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
                 track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
