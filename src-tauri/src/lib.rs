@@ -1,11 +1,14 @@
 use lofty::{file::{AudioFile, TaggedFileExt}, tag::Accessor};
 use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File},
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, RwLock,
+    },
     time::{Duration, UNIX_EPOCH},
 };
 use tauri::{Manager, State};
@@ -18,6 +21,7 @@ const AUDIO_EXTENSIONS: &[&str] = &[
 struct AppState {
     database_path: PathBuf,
     playback: Mutex<NativePlayback>,
+    equalizer: Arc<SharedEqualizer>,
 }
 
 #[derive(Default)]
@@ -89,6 +93,240 @@ struct PlaybackSnapshot {
     current_time_ms: u64,
     duration_ms: u64,
     volume: f32,
+}
+
+const EQ_FREQUENCIES_HZ: [f32; 10] = [
+    31.0, 62.0, 125.0, 250.0, 500.0, 1_000.0, 2_000.0, 4_000.0, 8_000.0, 16_000.0,
+];
+const EQ_BAND_COUNT: usize = EQ_FREQUENCIES_HZ.len();
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeEqualizerSettings {
+    enabled: bool,
+    preamp_db: f32,
+    auto_preamp: bool,
+    bands_db: [f32; EQ_BAND_COUNT],
+}
+
+impl Default for NativeEqualizerSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            preamp_db: -1.5,
+            auto_preamp: true,
+            bands_db: [3.5, 2.5, 0.5, -1.0, -1.5, 0.0, 1.0, 2.0, 3.0, 0.5],
+        }
+    }
+}
+
+impl NativeEqualizerSettings {
+    fn effective_preamp_db(&self) -> f32 {
+        let positive_peak = if self.auto_preamp {
+            self.bands_db.iter().copied().fold(0.0_f32, f32::max)
+        } else {
+            0.0
+        };
+        self.preamp_db - positive_peak
+    }
+}
+
+struct SharedEqualizer {
+    settings: RwLock<NativeEqualizerSettings>,
+    generation: AtomicU64,
+}
+
+impl SharedEqualizer {
+    fn new(settings: NativeEqualizerSettings) -> Self {
+        Self {
+            settings: RwLock::new(settings),
+            generation: AtomicU64::new(0),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct BiquadCoefficients {
+    b0: f32,
+    b1: f32,
+    b2: f32,
+    a1: f32,
+    a2: f32,
+}
+
+impl BiquadCoefficients {
+    fn identity() -> Self {
+        Self { b0: 1.0, b1: 0.0, b2: 0.0, a1: 0.0, a2: 0.0 }
+    }
+
+    fn peaking(frequency_hz: f32, sample_rate_hz: u32, gain_db: f32) -> Self {
+        if !gain_db.is_finite() || gain_db.abs() < 0.0001 {
+            return Self::identity();
+        }
+
+        let sample_rate = sample_rate_hz.max(1) as f32;
+        let frequency = frequency_hz.min((sample_rate * 0.45).max(1.0)).max(1.0);
+        let omega = 2.0 * std::f32::consts::PI * frequency / sample_rate;
+        let sin_omega = omega.sin();
+        let cos_omega = omega.cos();
+        let amplitude = 10.0_f32.powf(gain_db / 40.0);
+        let q = 1.414_213_5_f32;
+        let alpha = sin_omega / (2.0 * q);
+        let a0 = 1.0 + alpha / amplitude;
+
+        if !a0.is_finite() || a0.abs() < f32::EPSILON {
+            return Self::identity();
+        }
+
+        Self {
+            b0: (1.0 + alpha * amplitude) / a0,
+            b1: (-2.0 * cos_omega) / a0,
+            b2: (1.0 - alpha * amplitude) / a0,
+            a1: (-2.0 * cos_omega) / a0,
+            a2: (1.0 - alpha / amplitude) / a0,
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct BiquadState {
+    x1: f32,
+    x2: f32,
+    y1: f32,
+    y2: f32,
+}
+
+struct NativeEqualizerSource<S>
+where
+    S: Source<Item = f32>,
+{
+    source: S,
+    shared: Arc<SharedEqualizer>,
+    settings: NativeEqualizerSettings,
+    generation_seen: u64,
+    coefficients: [BiquadCoefficients; EQ_BAND_COUNT],
+    channel_states: Vec<[BiquadState; EQ_BAND_COUNT]>,
+    sample_rate_hz: u32,
+    channels: usize,
+    sample_index: u64,
+    preamp_gain: f32,
+}
+
+impl<S> NativeEqualizerSource<S>
+where
+    S: Source<Item = f32>,
+{
+    fn new(source: S, shared: Arc<SharedEqualizer>) -> Self {
+        let sample_rate_hz = source.sample_rate().max(1);
+        let channels = usize::from(source.channels().max(1));
+        let settings = shared.settings.read().map(|value| *value)
+            .unwrap_or_else(|_| NativeEqualizerSettings::default());
+        let generation_seen = shared.generation.load(Ordering::Acquire);
+        let coefficients = Self::build_coefficients(sample_rate_hz, &settings);
+        let preamp_gain = 10.0_f32.powf(settings.effective_preamp_db() / 20.0);
+        let channel_states = vec![[BiquadState::default(); EQ_BAND_COUNT]; channels];
+
+        Self {
+            source,
+            shared,
+            settings,
+            generation_seen,
+            coefficients,
+            channel_states,
+            sample_rate_hz,
+            channels,
+            sample_index: 0,
+            preamp_gain,
+        }
+    }
+
+    fn build_coefficients(
+        sample_rate_hz: u32,
+        settings: &NativeEqualizerSettings,
+    ) -> [BiquadCoefficients; EQ_BAND_COUNT] {
+        std::array::from_fn(|index| {
+            BiquadCoefficients::peaking(
+                EQ_FREQUENCIES_HZ[index],
+                sample_rate_hz,
+                settings.bands_db[index].clamp(-12.0, 12.0),
+            )
+        })
+    }
+
+    fn refresh_if_changed(&mut self) {
+        let generation = self.shared.generation.load(Ordering::Acquire);
+        if generation == self.generation_seen {
+            return;
+        }
+        if let Ok(settings) = self.shared.settings.read() {
+            self.settings = *settings;
+            self.coefficients = Self::build_coefficients(self.sample_rate_hz, &self.settings);
+            self.preamp_gain = 10.0_f32.powf(self.settings.effective_preamp_db() / 20.0);
+            self.generation_seen = generation;
+        }
+    }
+}
+
+impl<S> Iterator for NativeEqualizerSource<S>
+where
+    S: Source<Item = f32>,
+{
+    type Item = f32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let input = self.source.next()?;
+        if self.sample_index % self.channels as u64 == 0 {
+            self.refresh_if_changed();
+        }
+        let channel = (self.sample_index % self.channels as u64) as usize;
+        self.sample_index = self.sample_index.wrapping_add(1);
+
+        if !self.settings.enabled {
+            return Some(input);
+        }
+
+        let mut output = input * self.preamp_gain;
+        for band_index in 0..EQ_BAND_COUNT {
+            let coefficient = self.coefficients[band_index];
+            let state = &mut self.channel_states[channel][band_index];
+            let filtered = coefficient.b0 * output
+                + coefficient.b1 * state.x1
+                + coefficient.b2 * state.x2
+                - coefficient.a1 * state.y1
+                - coefficient.a2 * state.y2;
+            state.x2 = state.x1;
+            state.x1 = output;
+            state.y2 = state.y1;
+            state.y1 = if filtered.is_finite() { filtered } else { 0.0 };
+            output = state.y1;
+        }
+        Some(output)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.source.size_hint()
+    }
+}
+
+impl<S> Source for NativeEqualizerSource<S>
+where
+    S: Source<Item = f32>,
+{
+    fn current_span_len(&self) -> Option<usize> {
+        self.source.current_span_len()
+    }
+
+    fn channels(&self) -> u16 {
+        self.source.channels()
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.source.sample_rate()
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        self.source.total_duration()
+    }
 }
 
 fn initialize_database(path: &Path) -> Result<(), String> {
