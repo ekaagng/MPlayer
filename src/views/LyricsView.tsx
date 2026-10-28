@@ -113,6 +113,7 @@ export const LyricsView: React.FC<LyricsViewProps> = ({
 
   const handleShiftOffset = (deltaMs: number) => {
     setLyricsLines((prev) => shiftTimestamps(prev, deltaMs));
+    setDbSaved(false);
     setStatusMessage(`Offset waktu diterapkan: ${deltaMs > 0 ? `+${deltaMs}` : deltaMs}ms.`);
   };
 
@@ -185,7 +186,8 @@ export const LyricsView: React.FC<LyricsViewProps> = ({
           text: line.text.replace(regex, regexReplace),
         }))
       );
-      setStatusMessage('Pola teks berhasil diperbarui.');
+      setDbSaved(false);
+      setStatusMessage('Pola teks berhasil diperbarui. Simpan lirik untuk mempertahankan perubahan.');
     } catch {
       setStatusMessage('Format regex tidak valid.');
     }
@@ -236,6 +238,7 @@ export const LyricsView: React.FC<LyricsViewProps> = ({
 
           <button
             onClick={handleExportLrc}
+            disabled={!currentTrack || lyricsLines.length === 0}
             className="flex items-center gap-1 px-3 py-1.5 bg-surface hover:bg-surface-container border border-outline text-xs font-label font-bold uppercase cursor-pointer shadow-[1px_1px_0px_#1a1a1a]"
             title="Download file .LRC"
           >
@@ -262,7 +265,7 @@ export const LyricsView: React.FC<LyricsViewProps> = ({
               return (
                 <div
                   key={line.id}
-                  onClick={() => onSeek(line.timeMs)}
+                  onClick={() => { if (line.synced) onSeek(line.timeMs); }}
                   className="bg-primary text-on-primary p-4 flex items-center justify-between gap-3 shadow-md border-2 border-primary-container cursor-pointer transition-all -my-0.5"
                 >
                   <div className="flex items-center gap-3 min-w-0">
@@ -289,7 +292,7 @@ export const LyricsView: React.FC<LyricsViewProps> = ({
             return (
               <div
                 key={line.id}
-                onClick={() => onSeek(line.timeMs)}
+                onClick={() => { if (line.synced) onSeek(line.timeMs); }}
                 className={`p-3 flex items-center justify-between gap-3 transition-colors border border-outline/15 cursor-pointer ${
                   line.synced
                     ? 'bg-surface hover:bg-surface-container'
