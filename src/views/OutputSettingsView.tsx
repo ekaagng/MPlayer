@@ -70,7 +70,7 @@ export const OutputSettingsView: React.FC<OutputSettingsViewProps> = ({
       }`,
       `Buffer: ${settings.bufferSamples} samples (${settings.latencyMs}ms)`,
       'Status: UNVERIFIED — native output path is unavailable in browser preview',
-      `DSP Bypass: ${isBitPerfect ? 'Aktif (1:1)' : 'Tergantikan Filter EQ'}`,
+      `Bit-perfect status: UNVERIFIED (browser preview cannot inspect the native output path)`,
       'Spike Test: NOT RUN — native loopback/bit comparison is unavailable',
       '====================================================',
     ].join('\n');
