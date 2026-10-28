@@ -3,7 +3,7 @@ import { isTauri } from '@tauri-apps/api/core';
 import { AppView, Track, EqualizerState, OutputSettings } from './types/audio';
 import { MOCK_TRACKS } from './data/mockTracks';
 import { audioEngine } from './services/audioEngine';
-import { getNativeRuntimeInfo, listNativeTracks, toAppTrack } from './services/nativeBridge';
+import { EQ_FREQUENCY_KEYS, getNativeEqualizer, getNativeRuntimeInfo, listNativeTracks, toAppTrack } from './services/nativeBridge';
 import { Header } from './components/Header';
 import { LibraryView } from './views/LibraryView';
 import { NowPlayingView } from './views/NowPlayingView';
@@ -14,6 +14,8 @@ import { OutputSettingsView } from './views/OutputSettingsView';
 export default function App() {
   const [currentView, setCurrentView] = useState<AppView>('now-playing-and-signal-path');
   const [currentTrack, setCurrentTrack] = useState<Track | null>(() => isTauri() ? null : (MOCK_TRACKS[1] ?? null));
+  const [nativeTracks, setNativeTracks] = useState<Track[]>([]);
+  const [playQueue, setPlayQueue] = useState<Track[]>(() => isTauri() ? [] : MOCK_TRACKS);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
   const [currentDurationMs, setCurrentDurationMs] = useState(0);
@@ -54,7 +56,7 @@ export default function App() {
     let mounted = true;
     const unsubscribeTelemetry = audioEngine.subscribeTelemetry((telemetry) => {
       setCurrentDurationMs(telemetry.durationMs);
-      if (audioEngine.isCurrentlyPlaying()) setCurrentTimeMs(telemetry.currentTimeMs);
+      setCurrentTimeMs(telemetry.currentTimeMs);
     });
     const unsubscribeEnd = audioEngine.subscribeTrackEnd(() => setIsPlaying(false));
 
@@ -62,9 +64,32 @@ export default function App() {
       if (!mounted) return;
       setIsNativeRuntime(Boolean(runtime));
       if (runtime) {
-        const files = await listNativeTracks();
+        const [files, savedEqualizer] = await Promise.all([
+          listNativeTracks(),
+          getNativeEqualizer(),
+        ]);
         if (!mounted) return;
-        setCurrentTrack(files.length > 0 ? toAppTrack(files[0], 0) : null);
+        const tracks = files.map((file, index) => toAppTrack(file, index));
+        const restoredBands = { ...eqState.bands };
+        EQ_FREQUENCY_KEYS.forEach((frequency, index) => {
+          const value = savedEqualizer.bandsDb[index];
+          if (typeof value === 'number' && Number.isFinite(value)) {
+            restoredBands[frequency] = value;
+          }
+        });
+        const restoredEqualizer: EqualizerState = {
+          ...eqState,
+          enabled: savedEqualizer.enabled,
+          preamp: savedEqualizer.preampDb,
+          autoPreamp: savedEqualizer.autoPreamp,
+          bands: restoredBands,
+          preset: 'custom',
+        };
+        setEqState(restoredEqualizer);
+        audioEngine.setEqualizer(restoredEqualizer);
+        setNativeTracks(tracks);
+        setPlayQueue(tracks);
+        setCurrentTrack(tracks[0] ?? null);
       }
     }).catch((error: unknown) => {
       console.error('[MPlayer] Native runtime initialization failed:', error);
@@ -82,7 +107,8 @@ export default function App() {
     audioEngine.setEqualizer(newEq);
   }, []);
 
-  const handlePlayTrack = async (track: Track) => {
+  const handlePlayTrack = async (track: Track, queue?: Track[]) => {
+    if (queue && queue.length > 0) setPlayQueue(queue);
     setCurrentTrack(track);
     setCurrentTimeMs(0);
     setCurrentDurationMs(0);
@@ -106,7 +132,10 @@ export default function App() {
 
     setPlaybackError(null);
     try {
-      await audioEngine.playTrack(currentTrack, currentTimeMs);
+      const startFromMs = currentDurationMs > 0 && currentTimeMs >= currentDurationMs
+        ? 0
+        : currentTimeMs;
+      await audioEngine.playTrack(currentTrack, startFromMs);
       setIsPlaying(true);
     } catch (error) {
       setIsPlaying(false);
@@ -114,18 +143,37 @@ export default function App() {
     }
   };
 
+  const handleNativeTracksChange = useCallback((tracks: Track[]) => {
+    setNativeTracks(tracks);
+    setPlayQueue(tracks);
+  }, []);
+
+  useEffect(() => {
+    if (!isNativeRuntime || !currentTrack?.id.startsWith('native-')) return;
+    const stillIndexed = nativeTracks.some((track) => track.id === currentTrack.id);
+    if (!stillIndexed) {
+      audioEngine.stop();
+      setCurrentTrack(null);
+      setIsPlaying(false);
+      setCurrentTimeMs(0);
+      setCurrentDurationMs(0);
+    }
+  }, [isNativeRuntime, currentTrack, nativeTracks]);
+
   const handlePrevTrack = () => {
-    if (MOCK_TRACKS.length === 0 || !currentTrack) return;
-    const currentIndex = MOCK_TRACKS.findIndex((track) => track.id === currentTrack.id);
-    const previousIndex = currentIndex > 0 ? currentIndex - 1 : MOCK_TRACKS.length - 1;
-    void handlePlayTrack(MOCK_TRACKS[previousIndex]);
+    const tracks = playQueue;
+    if (tracks.length === 0 || !currentTrack) return;
+    const currentIndex = tracks.findIndex((track) => track.id === currentTrack.id);
+    const previousIndex = currentIndex < 0 ? tracks.length - 1 : (currentIndex > 0 ? currentIndex - 1 : tracks.length - 1);
+    void handlePlayTrack(tracks[previousIndex]);
   };
 
   const handleNextTrack = () => {
-    if (MOCK_TRACKS.length === 0 || !currentTrack) return;
-    const currentIndex = MOCK_TRACKS.findIndex((track) => track.id === currentTrack.id);
-    const nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % MOCK_TRACKS.length;
-    void handlePlayTrack(MOCK_TRACKS[nextIndex]);
+    const tracks = playQueue;
+    if (tracks.length === 0 || !currentTrack) return;
+    const currentIndex = tracks.findIndex((track) => track.id === currentTrack.id);
+    const nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % tracks.length;
+    void handlePlayTrack(tracks[nextIndex]);
   };
 
   const handleSeek = (milliseconds: number) => {
@@ -160,7 +208,8 @@ export default function App() {
           <LibraryView
             currentTrack={currentTrack}
             isPlaying={isPlaying}
-            onPlayTrack={(track) => { void handlePlayTrack(track); }}
+            onPlayTrack={(track, queue) => { void handlePlayTrack(track, queue); }}
+            onNativeTracksChange={handleNativeTracksChange}
           />
         )}
 
@@ -171,7 +220,7 @@ export default function App() {
             currentTimeMs={currentTimeMs}
             durationMs={currentDurationMs}
             isNativeRuntime={isNativeRuntime}
-            canNavigate={!isNativeRuntime || !currentTrack?.id.startsWith('native-')}
+            canNavigate={!isNativeRuntime || nativeTracks.length > 1}
             playbackError={playbackError}
             onTogglePlay={handleTogglePlay}
             onPrev={handlePrevTrack}

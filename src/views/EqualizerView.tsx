@@ -92,19 +92,17 @@ export const EqualizerView: React.FC<EqualizerViewProps> = ({ eqState, onUpdateE
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="font-headline text-lg font-bold text-on-surface sm:text-xl">Equalizer</h1>
-            <p className="mt-1 text-xs text-on-surface-variant">{isNativeRuntime ? "DSP/EQ native belum terhubung ke audio engine. Kontrol di bawah dinonaktifkan agar tidak memberi kesan efek sedang diterapkan." : "Pilih preset, atau sesuaikan 10 band secara manual."}</p>
+            <p className="mt-1 text-xs text-on-surface-variant">{isNativeRuntime ? "DSP 10-band berjalan di backend Rust. Perubahan diterapkan pada pemutaran native; output bit-perfect tidak dijamin." : "Pilih preset, atau sesuaikan 10 band secara manual."}</p>
           </div>
           <button
             type="button"
-            disabled={isNativeRuntime}
             onClick={() => onUpdateEq({ ...eqState, enabled: !eqState.enabled })}
             aria-pressed={eqState.enabled}
             className={
               'min-h-10 rounded-full border px-4 text-xs font-bold transition-colors active:scale-[0.98] ' +
               (eqState.enabled
                 ? 'border-primary bg-primary text-on-primary'
-                : 'border-outline/20 bg-surface text-on-surface-variant') +
-              (isNativeRuntime ? ' cursor-not-allowed opacity-50' : '')
+                : 'border-outline/20 bg-surface text-on-surface-variant')
             }
           >
             {eqState.enabled ? 'EQ Aktif' : 'EQ Nonaktif'}
@@ -118,15 +116,13 @@ export const EqualizerView: React.FC<EqualizerViewProps> = ({ eqState, onUpdateE
               <button
                 key={key}
                 type="button"
-                disabled={isNativeRuntime}
                 onClick={() => handlePresetSelect(key)}
                 aria-pressed={selected}
                 className={
                   'flex min-h-11 items-center justify-between gap-2 rounded-xl border px-3 py-2 text-left text-xs font-semibold transition-colors active:scale-[0.98] ' +
                   (selected
                     ? 'border-primary bg-primary-container text-on-primary-container'
-                    : 'border-outline/15 bg-surface hover:bg-surface-container text-on-surface') +
-                  (isNativeRuntime ? ' cursor-not-allowed opacity-50' : '')
+                    : 'border-outline/15 bg-surface hover:bg-surface-container text-on-surface')
                 }
               >
                 <span className="truncate">{PRESETS[key].label}</span>
@@ -145,7 +141,6 @@ export const EqualizerView: React.FC<EqualizerViewProps> = ({ eqState, onUpdateE
           </div>
           <button
             type="button"
-            disabled={isNativeRuntime}
             onClick={() => handlePresetSelect('flat')}
             className="rounded-lg border border-outline/15 px-2.5 py-2 text-[10px] font-bold text-on-surface hover:bg-surface-container sm:text-xs"
           >
@@ -169,7 +164,6 @@ export const EqualizerView: React.FC<EqualizerViewProps> = ({ eqState, onUpdateE
                 <input
                   id={inputId}
                   type="number"
-                  disabled={isNativeRuntime}
                   inputMode="decimal"
                   min="-12"
                   max="12"
@@ -184,7 +178,7 @@ export const EqualizerView: React.FC<EqualizerViewProps> = ({ eqState, onUpdateE
           })}
         </div>
         <p className="mt-3 px-1 text-[10px] leading-relaxed text-on-surface-variant">
-          {isNativeRuntime ? "Kontrol dinonaktifkan sampai DSP native benar-benar terintegrasi dan diuji." : "Nilai di atas dapat diedit langsung. Perubahan manual akan mengubah preset menjadi Custom."}
+          {isNativeRuntime ? "Perubahan diterapkan ke jalur DSP native. Preset/manual EQ mengubah sampel audio; bit-perfect tidak berlaku saat EQ aktif." : "Nilai di atas dapat diedit langsung. Perubahan manual akan mengubah preset menjadi Custom."}
         </p>
       </section>
     </main>
