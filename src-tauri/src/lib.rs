@@ -177,6 +177,88 @@ fn list_playlists_from_db(connection: &Connection) -> Result<Vec<NativePlaylist>
         .collect()
 }
 
+fn create_playlist_in_db(connection: &Connection, name: &str) -> Result<NativePlaylist, String> {
+    let normalized = name.trim();
+    if normalized.is_empty() || normalized.chars().count() > 80 {
+        return Err("Nama playlist wajib diisi dan maksimal 80 karakter.".to_string());
+    }
+    connection.execute("INSERT INTO playlists (name) VALUES (?1)", params![normalized])
+        .map_err(|error| format!("Playlist tidak dapat dibuat. Pastikan namanya belum digunakan. Detail: {error}"))?;
+    playlist_from_db(connection, connection.last_insert_rowid())
+}
+
+fn rename_playlist_in_db(connection: &Connection, playlist_id: i64, name: &str) -> Result<NativePlaylist, String> {
+    let normalized = name.trim();
+    if normalized.is_empty() || normalized.chars().count() > 80 {
+        return Err("Nama playlist wajib diisi dan maksimal 80 karakter.".to_string());
+    }
+    let changed = connection.execute(
+        "UPDATE playlists SET name = ?1 WHERE id = ?2",
+        params![normalized, playlist_id],
+    ).map_err(|error| format!("Nama playlist tidak dapat diperbarui. Pastikan namanya belum digunakan. Detail: {error}"))?;
+    if changed == 0 {
+        return Err("Playlist yang akan diubah tidak ditemukan.".to_string());
+    }
+    playlist_from_db(connection, playlist_id)
+}
+
+fn delete_playlist_in_db(connection: &Connection, playlist_id: i64) -> Result<(), String> {
+    let changed = connection.execute("DELETE FROM playlists WHERE id = ?1", [playlist_id])
+        .map_err(|error| format!("Playlist tidak dapat dihapus: {error}"))?;
+    if changed == 0 {
+        return Err("Playlist yang akan dihapus tidak ditemukan.".to_string());
+    }
+    Ok(())
+}
+
+fn add_track_to_playlist_in_db(
+    connection: &Connection,
+    playlist_id: i64,
+    track_id: i64,
+) -> Result<NativePlaylist, String> {
+    let position: i64 = connection.query_row(
+        "SELECT COALESCE(MAX(position), -1) + 1 FROM playlist_tracks WHERE playlist_id = ?1",
+        [playlist_id],
+        |row| row.get(0),
+    ).map_err(|error| format!("Posisi playlist tidak dapat dibaca: {error}"))?;
+    let changed = connection.execute(
+        "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position) VALUES (?1, ?2, ?3)",
+        params![playlist_id, track_id, position],
+    ).map_err(|error| format!("Track tidak dapat ditambahkan ke playlist: {error}"))?;
+    if changed == 0 {
+        return Err("Track sudah ada di playlist, atau playlist/track tidak ditemukan.".to_string());
+    }
+    playlist_from_db(connection, playlist_id)
+}
+
+fn get_lyrics_from_db(connection: &Connection, track_id: i64) -> Result<Option<String>, String> {
+    connection.query_row(
+        "SELECT lrc_text FROM lyrics WHERE track_id = ?1",
+        [track_id],
+        |row| row.get::<_, String>(0),
+    ).optional().map_err(|error| format!("Lirik tidak dapat dibaca dari SQLite: {error}"))
+}
+
+fn save_lyrics_to_db(connection: &Connection, track_id: i64, lrc_text: &str) -> Result<(), String> {
+    if lrc_text.len() > 1_048_576 {
+        return Err("File lirik terlalu besar; batas penyimpanan adalah 1 MiB per lagu.".to_string());
+    }
+    if lrc_text.trim().is_empty() {
+        connection.execute("DELETE FROM lyrics WHERE track_id = ?1", [track_id])
+            .map_err(|error| format!("Lirik tidak dapat dihapus: {error}"))?;
+        return Ok(());
+    }
+    connection.execute(
+        "INSERT INTO lyrics (track_id, lrc_text, updated_at)
+         VALUES (?1, ?2, CURRENT_TIMESTAMP)
+         ON CONFLICT(track_id) DO UPDATE SET
+           lrc_text = excluded.lrc_text,
+           updated_at = CURRENT_TIMESTAMP",
+        params![track_id, lrc_text],
+    ).map_err(|error| format!("Lirik tidak dapat disimpan. Pastikan track sudah diindeks ke library. Detail: {error}"))?;
+    Ok(())
+}
+
 fn supported_audio_file(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
@@ -235,95 +317,38 @@ fn native_list_playlists(state: State<'_, AppState>) -> Result<Vec<NativePlaylis
 
 #[tauri::command]
 fn native_create_playlist(name: String, state: State<'_, AppState>) -> Result<NativePlaylist, String> {
-    let normalized = name.trim();
-    if normalized.is_empty() || normalized.chars().count() > 80 {
-        return Err("Nama playlist wajib diisi dan maksimal 80 karakter.".to_string());
-    }
     let connection = open_database(&state.database_path)?;
-    connection.execute(
-        "INSERT INTO playlists (name) VALUES (?1)",
-        params![normalized],
-    ).map_err(|error| format!("Playlist tidak dapat dibuat. Pastikan namanya belum digunakan. Detail: {error}"))?;
-    let id = connection.last_insert_rowid();
-    playlist_from_db(&connection, id)
+    create_playlist_in_db(&connection, &name)
 }
 
 #[tauri::command]
 fn native_rename_playlist(playlist_id: i64, name: String, state: State<'_, AppState>) -> Result<NativePlaylist, String> {
-    let normalized = name.trim();
-    if normalized.is_empty() || normalized.chars().count() > 80 {
-        return Err("Nama playlist wajib diisi dan maksimal 80 karakter.".to_string());
-    }
     let connection = open_database(&state.database_path)?;
-    let changed = connection.execute(
-        "UPDATE playlists SET name = ?1 WHERE id = ?2",
-        params![normalized, playlist_id],
-    ).map_err(|error| format!("Nama playlist tidak dapat diperbarui. Pastikan namanya belum digunakan. Detail: {error}"))?;
-    if changed == 0 {
-        return Err("Playlist yang akan diubah tidak ditemukan.".to_string());
-    }
-    playlist_from_db(&connection, playlist_id)
+    rename_playlist_in_db(&connection, playlist_id, &name)
 }
 
 #[tauri::command]
 fn native_delete_playlist(playlist_id: i64, state: State<'_, AppState>) -> Result<(), String> {
     let connection = open_database(&state.database_path)?;
-    let changed = connection.execute("DELETE FROM playlists WHERE id = ?1", [playlist_id])
-        .map_err(|error| format!("Playlist tidak dapat dihapus: {error}"))?;
-    if changed == 0 {
-        return Err("Playlist yang akan dihapus tidak ditemukan.".to_string());
-    }
-    Ok(())
+    delete_playlist_in_db(&connection, playlist_id)
 }
 
 #[tauri::command]
 fn native_add_track_to_playlist(playlist_id: i64, track_id: i64, state: State<'_, AppState>) -> Result<NativePlaylist, String> {
     let connection = open_database(&state.database_path)?;
-    let position: i64 = connection.query_row(
-        "SELECT COALESCE(MAX(position), -1) + 1 FROM playlist_tracks WHERE playlist_id = ?1",
-        [playlist_id],
-        |row| row.get(0),
-    ).map_err(|error| format!("Posisi playlist tidak dapat dibaca: {error}"))?;
-    let changed = connection.execute(
-        "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position) VALUES (?1, ?2, ?3)",
-        params![playlist_id, track_id, position],
-    ).map_err(|error| format!("Track tidak dapat ditambahkan ke playlist: {error}"))?;
-    if changed == 0 {
-        return Err("Track sudah ada di playlist, atau playlist/track tidak ditemukan.".to_string());
-    }
-    playlist_from_db(&connection, playlist_id)
+    add_track_to_playlist_in_db(&connection, playlist_id, track_id)
 }
 
 #[tauri::command]
 fn native_get_lyrics(track_id: i64, state: State<'_, AppState>) -> Result<Option<String>, String> {
     let connection = open_database(&state.database_path)?;
-    connection.query_row(
-        "SELECT lrc_text FROM lyrics WHERE track_id = ?1",
-        [track_id],
-        |row| row.get::<_, String>(0),
-    ).optional().map_err(|error| format!("Lirik tidak dapat dibaca dari SQLite: {error}"))
+    get_lyrics_from_db(&connection, track_id)
 }
 
 #[tauri::command]
 fn native_save_lyrics(track_id: i64, lrc_text: String, state: State<'_, AppState>) -> Result<(), String> {
-    if lrc_text.len() > 1_048_576 {
-        return Err("File lirik terlalu besar; batas penyimpanan adalah 1 MiB per lagu.".to_string());
-    }
     let connection = open_database(&state.database_path)?;
-    if lrc_text.trim().is_empty() {
-        connection.execute("DELETE FROM lyrics WHERE track_id = ?1", [track_id])
-            .map_err(|error| format!("Lirik tidak dapat dihapus: {error}"))?;
-        return Ok(());
-    }
-    connection.execute(
-        "INSERT INTO lyrics (track_id, lrc_text, updated_at)
-         VALUES (?1, ?2, CURRENT_TIMESTAMP)
-         ON CONFLICT(track_id) DO UPDATE SET
-           lrc_text = excluded.lrc_text,
-           updated_at = CURRENT_TIMESTAMP",
-        params![track_id, lrc_text],
-    ).map_err(|error| format!("Lirik tidak dapat disimpan. Pastikan track sudah diindeks ke library. Detail: {error}"))?;
-    Ok(())
+    save_lyrics_to_db(&connection, track_id, &lrc_text)
 }
 
 #[tauri::command]
@@ -529,7 +554,12 @@ fn snapshot_from_playback(playback: &NativePlayback) -> PlaybackSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use super::{initialize_database, list_tracks_from_db, supported_audio_file, AUDIO_EXTENSIONS};
+    use super::{
+        add_track_to_playlist_in_db, create_playlist_in_db, delete_playlist_in_db,
+        get_lyrics_from_db, initialize_database, list_playlists_from_db, list_tracks_from_db,
+        open_database, rename_playlist_in_db, save_lyrics_to_db, supported_audio_file,
+        AUDIO_EXTENSIONS,
+    };
     use rusqlite::Connection;
     use std::{fs, path::Path, time::{SystemTime, UNIX_EPOCH}};
 
@@ -582,7 +612,29 @@ mod tests {
         assert_eq!(tracks[0].title, "test");
         assert_eq!(tracks[0].format, "FLAC");
         assert_eq!(tracks[0].size_bytes, 4096);
+        drop(connection);
 
+        let connection = open_database(&database_path).expect("foreign keys should be active");
+        let playlist = create_playlist_in_db(&connection, "  Night Drive  ")
+            .expect("playlist should be created");
+        assert_eq!(playlist.name, "Night Drive");
+        assert!(create_playlist_in_db(&connection, "night drive").is_err());
+        let populated = add_track_to_playlist_in_db(&connection, playlist.id, tracks[0].id)
+            .expect("indexed track should be added");
+        assert_eq!(populated.track_ids, vec![tracks[0].id]);
+        assert!(add_track_to_playlist_in_db(&connection, playlist.id, tracks[0].id).is_err());
+        let renamed = rename_playlist_in_db(&connection, playlist.id, "Night Drive 2")
+            .expect("playlist should be renamed");
+        assert_eq!(renamed.name, "Night Drive 2");
+
+        let lrc = "[ti:Test]\n[ar:Test Artist]\n[00:01.00]A lyric line";
+        save_lyrics_to_db(&connection, tracks[0].id, lrc).expect("lyrics should be saved");
+        assert_eq!(get_lyrics_from_db(&connection, tracks[0].id).unwrap().as_deref(), Some(lrc));
+        save_lyrics_to_db(&connection, tracks[0].id, "[ti:Updated]").expect("lyrics should update");
+        assert_eq!(get_lyrics_from_db(&connection, tracks[0].id).unwrap().as_deref(), Some("[ti:Updated]"));
+
+        delete_playlist_in_db(&connection, playlist.id).expect("playlist should be deleted");
+        assert!(list_playlists_from_db(&connection).expect("playlists should be listed").is_empty());
         drop(connection);
         fs::remove_dir_all(&test_dir).expect("test directory should be removed");
     }
