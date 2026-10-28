@@ -100,14 +100,14 @@ function requireNativeRuntime(): void {
 }
 
 function parseNativePlaylistId(id: string): number {
-  const match = /^native-playlist-(\\d+)$/.exec(id);
+  const match = /^native-playlist-(\d+)$/.exec(id);
   const parsed = match ? Number(match[1]) : NaN;
   if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error('ID playlist native tidak valid.');
   return parsed;
 }
 
 function parseNativeTrackId(id: string): number {
-  const match = /^native-(\\d+)$/.exec(id);
+  const match = /^native-(\d+)$/.exec(id);
   const parsed = match ? Number(match[1]) : NaN;
   if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error('ID track native tidak valid.');
   return parsed;
