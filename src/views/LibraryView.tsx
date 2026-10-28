@@ -41,6 +41,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(null);
   const [trackToAdd, setTrackToAdd] = useState<Track | null>(null);
   const [playlistEditor, setPlaylistEditor] = useState<Playlist | null>(null);
+  const [isPlaylistEditorOpen, setIsPlaylistEditorOpen] = useState(false);
   const [playlistName, setPlaylistName] = useState('');
   const [playlistToDelete, setPlaylistToDelete] = useState<Playlist | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -95,29 +96,23 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   };
 
   const handleAddToPlaylist = (playlistId: string, track: Track) => {
-    let wasDuplicate = false;
-    setPlaylists((prev) =>
-      prev.map((playlist) => {
-        if (playlist.id !== playlistId) return playlist;
-        const trackIds = playlist.trackIds ?? [];
-        if (trackIds.includes(track.id)) {
-          wasDuplicate = true;
-          return playlist;
-        }
-        const nextTrackIds = [...trackIds, track.id];
-        return {
-          ...playlist,
-          trackIds: nextTrackIds,
-          trackCount: nextTrackIds.length,
-          subtitle: `${nextTrackIds.length} lagu`,
-        };
-      })
-    );
+    const target = playlists.find((playlist) => playlist.id === playlistId);
+    if (!target) return;
+    const currentTrackIds = target.trackIds ?? [];
+    if (currentTrackIds.includes(track.id)) {
+      setSyncToast('Lagu ini sudah ada di playlist tersebut.');
+      setTrackToAdd(null);
+      setTimeout(() => setSyncToast(null), 3000);
+      return;
+    }
+    const nextTrackIds = [...currentTrackIds, track.id];
+    setPlaylists((prev) => prev.map((playlist) => playlist.id === playlistId
+      ? { ...playlist, trackIds: nextTrackIds, trackCount: nextTrackIds.length, subtitle: `${nextTrackIds.length} lagu` }
+      : playlist
+    ));
     setSelectedPlaylistId(playlistId);
     setTrackToAdd(null);
-    setSyncToast(wasDuplicate
-      ? 'Lagu ini sudah ada di playlist tersebut.'
-      : 'Lagu ditambahkan ke playlist.');
+    setSyncToast('Lagu ditambahkan ke playlist.');
     setTimeout(() => setSyncToast(null), 3000);
   };
 
@@ -152,6 +147,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
       setSelectedPlaylistId(newPlaylist.id);
     }
     setPlaylistEditor(null);
+    setIsPlaylistEditorOpen(false);
     setPlaylistName('');
     setSyncToast(playlistEditor ? 'Nama playlist diperbarui.' : 'Playlist berhasil dibuat.');
     setTimeout(() => setSyncToast(null), 3000);
@@ -374,6 +370,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                         event.stopPropagation();
                         setPlaylistEditor(pl);
                         setPlaylistName(pl.title);
+                        setIsPlaylistEditorOpen(true);
                       }}
                       className="flex-1 px-2 py-1 text-[10px] font-bold uppercase border border-outline/40 hover:bg-surface-container"
                       aria-label={`Edit playlist ${pl.title}`}
@@ -399,7 +396,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 onClick={() => {
                   setPlaylistEditor(null);
                   setPlaylistName('');
-                }
+                  setIsPlaylistEditorOpen(true);
+                }}
                 className="w-full py-2 px-2.5 bg-surface-container hover:bg-surface-container-high text-on-surface font-headline text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors border border-outline cursor-pointer mt-1"
               >
                 <span className="material-symbols-outlined text-[16px]">add</span>
@@ -669,7 +667,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         </div>
       )}
 
-      {playlistEditor !== null || playlistName === '' && selectedPlaylistId === '__create__' ? (
+      {isPlaylistEditorOpen ? (
         <div className="fixed inset-0 bg-primary/70 backdrop-blur-sm z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Edit playlist">
           <form
             className="bg-surface-bright border-2 border-outline shadow-[6px_6px_0px_#1a1a1a] p-5 max-w-md w-full flex flex-col gap-4"
@@ -679,7 +677,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             <label className="text-xs font-bold" htmlFor="playlist-name">Nama playlist</label>
             <input id="playlist-name" autoFocus value={playlistName} onChange={(event) => setPlaylistName(event.target.value)} maxLength={80} className="w-full bg-surface-container px-3 py-2 text-sm border-2 border-outline" placeholder="Contoh: Jazz Malam" />
             <div className="flex justify-end gap-2">
-              <button type="button" onClick={() => { setPlaylistEditor(null); setPlaylistName(''); setSelectedPlaylistId((id) => id === '__create__' ? null : id); }} className="px-4 py-2 border border-outline text-xs font-bold uppercase">Batal</button>
+              <button type="button" onClick={() => { setPlaylistEditor(null); setPlaylistName(''); setIsPlaylistEditorOpen(false); }} className="px-4 py-2 border border-outline text-xs font-bold uppercase">Batal</button>
               <button type="submit" className="px-4 py-2 bg-primary text-on-primary border border-outline text-xs font-bold uppercase">Simpan</button>
             </div>
           </form>
