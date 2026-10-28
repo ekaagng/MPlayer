@@ -18,7 +18,7 @@ import {
 interface LibraryViewProps {
   currentTrack: Track | null;
   isPlaying: boolean;
-  onPlayTrack: (track: Track) => void;
+  onPlayTrack: (track: Track, queue?: Track[]) => void;
   onNativeTracksChange?: (tracks: Track[]) => void;
 }
 
@@ -554,7 +554,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={() => onPlayTrack(track)}
+                      onClick={() => onPlayTrack(track, displayedTracks)}
                       aria-label={'Putar ' + track.title}
                       title="Putar"
                       className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-on-primary"
@@ -650,7 +650,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                           </td>
                           <td className="py-3 px-3 text-center">
                             <button
-                              onClick={() => onPlayTrack(track)}
+                              onClick={() => onPlayTrack(track, displayedTracks)}
                               className="w-7 h-7 bg-primary text-primary-container hover:bg-secondary hover:text-white flex items-center justify-center transition-colors cursor-pointer mx-auto shadow-sm"
                               title="Putar Langsung"
                             >
@@ -664,7 +664,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                     return (
                       <tr
                         key={track.id}
-                        onClick={() => onPlayTrack(track)}
+                        onClick={() => onPlayTrack(track, displayedTracks)}
                         className={`transition-colors cursor-pointer border-b border-outline/15 ${
                           isTrackActive
                             ? 'bg-primary-container/40 font-semibold'
