@@ -162,7 +162,7 @@ export function toAppTrack(file: NativeTrackFile, index = 0): Track {
   const bitDepth = file.bitDepth ?? 0;
   const bitrateBps = Math.max(0, file.bitrateBps ?? 0);
   const sampleRate = sampleRateHz >= 1_000_000
-    ? `${(sampleRateHz / 1_000_000).toFixed(1).replace(/\\.0$/, '')}MHz`
+    ? `${(sampleRateHz / 1_000_000).toFixed(1).replace(/\.0$/, '')}MHz`
     : sampleRateHz > 0
       ? `${(sampleRateHz / 1000).toFixed(sampleRateHz % 1000 === 0 ? 0 : 1)}kHz`
       : 'Metadata belum dibaca';
