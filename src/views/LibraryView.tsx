@@ -86,6 +86,11 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     });
   }, [searchQuery, activeFormatFilter]);
 
+  const selectedPlaylist = playlists.find((playlist) => playlist.id === selectedPlaylistId) ?? null;
+  const displayedTracks = selectedPlaylist
+    ? filteredTracks.filter((track) => (selectedPlaylist.trackIds ?? []).includes(track.id))
+    : filteredTracks;
+
   const handleSync = () => {
     setIsSyncing(true);
     setTimeout(() => {
@@ -412,11 +417,12 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           <div className="bg-surface-bright p-3 shadow-sm flex items-center justify-between border-2 border-outline">
             <div className="flex items-center gap-2.5">
               <span className="font-headline font-bold text-sm uppercase tracking-tight text-on-surface">
-                Daftar Koleksi Lagu
+                {selectedPlaylist ? `Playlist: ${selectedPlaylist.title}` : 'Daftar Koleksi Lagu'}
               </span>
               <span className="px-2 py-0.5 bg-primary text-on-primary font-mono text-[10px] font-bold">
-                {filteredTracks.length} Lagu Ditampilkan
+                {displayedTracks.length} Lagu Ditampilkan
               </span>
+              {selectedPlaylist && <button type="button" onClick={() => setSelectedPlaylistId(null)} className="px-2 py-1 border border-outline text-[10px] font-bold uppercase hover:bg-surface-container">Semua lagu</button>}
             </div>
             <span className="text-xs font-mono text-on-surface-variant hidden sm:inline">
               Klik baris lagu untuk langsung memutar
@@ -440,7 +446,9 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y-0 text-xs font-body">
-                  {filteredTracks.map((track) => {
+                  {displayedTracks.length === 0 ? (
+                    <tr><td colSpan={9} className="px-4 py-10 text-center text-sm text-on-surface-variant">{selectedPlaylist ? 'Playlist ini belum memiliki lagu. Pilih “Semua lagu” untuk menambahkan lagu.' : 'Tidak ada lagu yang cocok dengan pencarian atau filter.'}</td></tr>
+                  ) : displayedTracks.map((track) => {
                     const isTrackActive = currentTrack?.id === track.id;
                     const isTrack2Special = track.id === 'track-02' && !swipedItemRestored;
 
