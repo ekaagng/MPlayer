@@ -1,5 +1,5 @@
 use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::{
     fs::{self, File},
@@ -46,6 +46,14 @@ struct NativeTrack {
     format: String,
     size_bytes: u64,
     modified_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativePlaylist {
+    id: i64,
+    name: String,
+    track_ids: Vec<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -123,6 +131,50 @@ fn initialize_database(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn open_database(path: &Path) -> Result<Connection, String> {
+    let connection = Connection::open(path)
+        .map_err(|error| format!("Database lokal tidak dapat dibuka: {error}"))?;
+    connection.pragma_update(None, "foreign_keys", "ON")
+        .map_err(|error| format!("Foreign-key constraints gagal diaktifkan: {error}"))?;
+    connection.busy_timeout(Duration::from_secs(5))
+        .map_err(|error| format!("Timeout database gagal disetel: {error}"))?;
+    Ok(connection)
+}
+
+fn playlist_from_db(connection: &Connection, playlist_id: i64) -> Result<NativePlaylist, String> {
+    let name = connection.query_row(
+        "SELECT name FROM playlists WHERE id = ?1",
+        [playlist_id],
+        |row| row.get::<_, String>(0),
+    ).map_err(|error| format!("Playlist tidak ditemukan: {error}"))?;
+
+    let mut statement = connection.prepare(
+        "SELECT track_id FROM playlist_tracks WHERE playlist_id = ?1 ORDER BY position, track_id"
+    ).map_err(|error| format!("Query track playlist gagal: {error}"))?;
+    let rows = statement.query_map([playlist_id], |row| row.get::<_, i64>(0))
+        .map_err(|error| format!("Membaca track playlist gagal: {error}"))?;
+    let track_ids = rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Membaca track playlist gagal: {error}"))?;
+
+    Ok(NativePlaylist { id: playlist_id, name, track_ids })
+}
+
+fn list_playlists_from_db(connection: &Connection) -> Result<Vec<NativePlaylist>, String> {
+    let playlist_ids = {
+        let mut statement = connection.prepare(
+            "SELECT id FROM playlists ORDER BY name COLLATE NOCASE, id"
+        ).map_err(|error| format!("Query playlist gagal: {error}"))?;
+        let rows = statement.query_map([], |row| row.get::<_, i64>(0))
+            .map_err(|error| format!("Membaca playlist gagal: {error}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Membaca playlist gagal: {error}"))?
+    };
+
+    playlist_ids.into_iter()
+        .map(|playlist_id| playlist_from_db(connection, playlist_id))
+        .collect()
+}
+
 fn supported_audio_file(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
@@ -169,9 +221,107 @@ fn native_runtime_info() -> RuntimeInfo {
 
 #[tauri::command]
 fn native_list_tracks(state: State<'_, AppState>) -> Result<Vec<NativeTrack>, String> {
-    let connection = Connection::open(&state.database_path)
-        .map_err(|error| format!("Database library tidak dapat dibuka: {error}"))?;
+    let connection = open_database(&state.database_path)?;
     list_tracks_from_db(&connection)
+}
+
+#[tauri::command]
+fn native_list_playlists(state: State<'_, AppState>) -> Result<Vec<NativePlaylist>, String> {
+    let connection = open_database(&state.database_path)?;
+    list_playlists_from_db(&connection)
+}
+
+#[tauri::command]
+fn native_create_playlist(name: String, state: State<'_, AppState>) -> Result<NativePlaylist, String> {
+    let normalized = name.trim();
+    if normalized.is_empty() || normalized.chars().count() > 80 {
+        return Err("Nama playlist wajib diisi dan maksimal 80 karakter.".to_string());
+    }
+    let connection = open_database(&state.database_path)?;
+    connection.execute(
+        "INSERT INTO playlists (name) VALUES (?1)",
+        params![normalized],
+    ).map_err(|error| format!("Playlist tidak dapat dibuat. Pastikan namanya belum digunakan. Detail: {error}"))?;
+    let id = connection.last_insert_rowid();
+    playlist_from_db(&connection, id)
+}
+
+#[tauri::command]
+fn native_rename_playlist(playlist_id: i64, name: String, state: State<'_, AppState>) -> Result<NativePlaylist, String> {
+    let normalized = name.trim();
+    if normalized.is_empty() || normalized.chars().count() > 80 {
+        return Err("Nama playlist wajib diisi dan maksimal 80 karakter.".to_string());
+    }
+    let connection = open_database(&state.database_path)?;
+    let changed = connection.execute(
+        "UPDATE playlists SET name = ?1 WHERE id = ?2",
+        params![normalized, playlist_id],
+    ).map_err(|error| format!("Nama playlist tidak dapat diperbarui. Pastikan namanya belum digunakan. Detail: {error}"))?;
+    if changed == 0 {
+        return Err("Playlist yang akan diubah tidak ditemukan.".to_string());
+    }
+    playlist_from_db(&connection, playlist_id)
+}
+
+#[tauri::command]
+fn native_delete_playlist(playlist_id: i64, state: State<'_, AppState>) -> Result<(), String> {
+    let connection = open_database(&state.database_path)?;
+    let changed = connection.execute("DELETE FROM playlists WHERE id = ?1", [playlist_id])
+        .map_err(|error| format!("Playlist tidak dapat dihapus: {error}"))?;
+    if changed == 0 {
+        return Err("Playlist yang akan dihapus tidak ditemukan.".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn native_add_track_to_playlist(playlist_id: i64, track_id: i64, state: State<'_, AppState>) -> Result<NativePlaylist, String> {
+    let connection = open_database(&state.database_path)?;
+    let position: i64 = connection.query_row(
+        "SELECT COALESCE(MAX(position), -1) + 1 FROM playlist_tracks WHERE playlist_id = ?1",
+        [playlist_id],
+        |row| row.get(0),
+    ).map_err(|error| format!("Posisi playlist tidak dapat dibaca: {error}"))?;
+    let changed = connection.execute(
+        "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position) VALUES (?1, ?2, ?3)",
+        params![playlist_id, track_id, position],
+    ).map_err(|error| format!("Track tidak dapat ditambahkan ke playlist: {error}"))?;
+    if changed == 0 {
+        return Err("Track sudah ada di playlist, atau playlist/track tidak ditemukan.".to_string());
+    }
+    playlist_from_db(&connection, playlist_id)
+}
+
+#[tauri::command]
+fn native_get_lyrics(track_id: i64, state: State<'_, AppState>) -> Result<Option<String>, String> {
+    let connection = open_database(&state.database_path)?;
+    connection.query_row(
+        "SELECT lrc_text FROM lyrics WHERE track_id = ?1",
+        [track_id],
+        |row| row.get::<_, String>(0),
+    ).optional().map_err(|error| format!("Lirik tidak dapat dibaca dari SQLite: {error}"))
+}
+
+#[tauri::command]
+fn native_save_lyrics(track_id: i64, lrc_text: String, state: State<'_, AppState>) -> Result<(), String> {
+    if lrc_text.len() > 1_048_576 {
+        return Err("File lirik terlalu besar; batas penyimpanan adalah 1 MiB per lagu.".to_string());
+    }
+    let connection = open_database(&state.database_path)?;
+    if lrc_text.trim().is_empty() {
+        connection.execute("DELETE FROM lyrics WHERE track_id = ?1", [track_id])
+            .map_err(|error| format!("Lirik tidak dapat dihapus: {error}"))?;
+        return Ok(());
+    }
+    connection.execute(
+        "INSERT INTO lyrics (track_id, lrc_text, updated_at)
+         VALUES (?1, ?2, CURRENT_TIMESTAMP)
+         ON CONFLICT(track_id) DO UPDATE SET
+           lrc_text = excluded.lrc_text,
+           updated_at = CURRENT_TIMESTAMP",
+        params![track_id, lrc_text],
+    ).map_err(|error| format!("Lirik tidak dapat disimpan. Pastikan track sudah diindeks ke library. Detail: {error}"))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -185,8 +335,7 @@ fn native_scan_music_directory(path: String, state: State<'_, AppState>) -> Resu
         return Err("Folder musik tidak ditemukan atau tidak dapat diakses.".to_string());
     }
     let root = selected.canonicalize().map_err(|error| format!("Folder tidak dapat dibuka: {error}"))?;
-    let connection = Connection::open(&state.database_path)
-        .map_err(|error| format!("Database library tidak dapat dibuka: {error}"))?;
+    let connection = open_database(&state.database_path)?;
     let transaction = connection
         .unchecked_transaction()
         .map_err(|error| format!("Transaksi database gagal: {error}"))?;
@@ -458,6 +607,13 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             native_runtime_info,
             native_list_tracks,
+            native_list_playlists,
+            native_create_playlist,
+            native_rename_playlist,
+            native_delete_playlist,
+            native_add_track_to_playlist,
+            native_get_lyrics,
+            native_save_lyrics,
             native_scan_music_directory,
             native_play_track,
             native_pause,
