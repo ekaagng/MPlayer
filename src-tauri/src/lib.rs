@@ -593,17 +593,24 @@ fn native_save_lyrics(track_id: i64, lrc_text: String, state: State<'_, AppState
 }
 
 #[tauri::command]
-fn native_scan_music_directory(path: String, state: State<'_, AppState>) -> Result<ScanResult, String> {
+async fn native_scan_music_directory(path: String, state: State<'_, AppState>) -> Result<ScanResult, String> {
     if cfg!(any(target_os = "android", target_os = "ios")) {
         return Err("Pemilihan folder penuh belum tersedia di Android/iOS. Integrasi document picker mobile diperlukan.".to_string());
     }
 
+    let database_path = state.database_path.clone();
+    tauri::async_runtime::spawn_blocking(move || scan_music_directory_inner(path, database_path))
+        .await
+        .map_err(|error| format!("Pemindaian folder native gagal dijalankan: {error}"))?
+}
+
+fn scan_music_directory_inner(path: String, database_path: PathBuf) -> Result<ScanResult, String> {
     let selected = PathBuf::from(&path);
     if !selected.is_dir() {
         return Err("Folder musik tidak ditemukan atau tidak dapat diakses.".to_string());
     }
     let root = selected.canonicalize().map_err(|error| format!("Folder tidak dapat dibuka: {error}"))?;
-    let connection = open_database(&state.database_path)?;
+    let connection = open_database(&database_path)?;
 
     let mut pending = vec![root.clone()];
     let mut paths = Vec::<PathBuf>::new();
