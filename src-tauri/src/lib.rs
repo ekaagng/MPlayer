@@ -25,6 +25,7 @@ struct NativePlayback {
     output_stream: Option<OutputStream>,
     sink: Option<Sink>,
     track_path: Option<String>,
+    track_id: Option<i64>,
     duration_ms: u64,
     volume: f32,
 }
@@ -69,6 +70,14 @@ struct ScanResult {
     tracks: Vec<NativeTrack>,
     truncated: bool,
     scanned_folder: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeHistoryEntry {
+    track: NativeTrack,
+    played_at: String,
+    last_position_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -466,6 +475,56 @@ fn list_tracks_from_db(connection: &Connection) -> Result<Vec<NativeTrack>, Stri
         .map_err(|error| format!("Membaca track gagal: {error}"))
 }
 
+fn persist_current_playback_position(playback: &NativePlayback, database_path: &Path) -> Result<(), String> {
+    let Some(track_id) = playback.track_id else {
+        return Ok(());
+    };
+    let position_ms = playback.sink.as_ref()
+        .map(|sink| sink.get_pos().as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or(0);
+    let connection = open_database(database_path)?;
+    connection.execute(
+        "UPDATE playback_history SET last_position_ms = ?1
+         WHERE id = (SELECT id FROM playback_history WHERE track_id = ?2 ORDER BY id DESC LIMIT 1)",
+        params![position_ms, track_id],
+    ).map_err(|error| format!("Posisi terakhir playback gagal disimpan: {error}"))?;
+    Ok(())
+}
+
+fn list_recent_history_from_db(connection: &Connection, limit: u32) -> Result<Vec<NativeHistoryEntry>, String> {
+    let mut statement = connection.prepare(
+        "SELECT t.id, t.path, t.title, t.artist, t.album, t.format, t.size_bytes,
+                t.modified_at, t.duration_ms, t.sample_rate_hz, t.bit_depth, t.bitrate_bps,
+                h.played_at, h.last_position_ms
+         FROM playback_history h
+         INNER JOIN tracks t ON t.id = h.track_id
+         ORDER BY h.id DESC
+         LIMIT ?1"
+    ).map_err(|error| format!("Query riwayat playback gagal: {error}"))?;
+    let rows = statement.query_map([limit.clamp(1, 100)], |row| {
+        Ok(NativeHistoryEntry {
+            track: NativeTrack {
+                id: row.get(0)?,
+                path: row.get(1)?,
+                title: row.get(2)?,
+                artist: row.get(3)?,
+                album: row.get(4)?,
+                format: row.get(5)?,
+                size_bytes: row.get::<_, i64>(6)?.max(0) as u64,
+                modified_at: row.get(7)?,
+                duration_ms: row.get(8)?,
+                sample_rate_hz: row.get(9)?,
+                bit_depth: row.get(10)?,
+                bitrate_bps: row.get(11)?,
+            },
+            played_at: row.get(12)?,
+            last_position_ms: row.get::<_, i64>(13)?.max(0) as u64,
+        })
+    }).map_err(|error| format!("Membaca riwayat playback gagal: {error}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Membaca entri riwayat gagal: {error}"))
+}
+
 #[tauri::command]
 fn native_runtime_info() -> RuntimeInfo {
     RuntimeInfo {
@@ -480,6 +539,12 @@ fn native_runtime_info() -> RuntimeInfo {
 fn native_list_tracks(state: State<'_, AppState>) -> Result<Vec<NativeTrack>, String> {
     let connection = open_database(&state.database_path)?;
     list_tracks_from_db(&connection)
+}
+
+#[tauri::command]
+fn native_get_recent_history(limit: Option<u32>, state: State<'_, AppState>) -> Result<Vec<NativeHistoryEntry>, String> {
+    let connection = open_database(&state.database_path)?;
+    list_recent_history_from_db(&connection, limit.unwrap_or(20))
 }
 
 #[tauri::command]
@@ -623,8 +688,19 @@ fn native_play_track(
     let duration_ms = decoder.total_duration()
         .map(|duration| duration.as_millis().min(u64::MAX as u128) as u64)
         .unwrap_or(0);
+    let canonical_path = file_path.canonicalize().unwrap_or_else(|_| file_path.clone());
+    let canonical_path_string = canonical_path.to_string_lossy().into_owned();
+    let database_path = state.database_path.clone();
+    let indexed_track_id = open_database(&database_path).ok().and_then(|connection| {
+        connection.query_row(
+            "SELECT id FROM tracks WHERE path = ?1",
+            [&canonical_path_string],
+            |row| row.get::<_, i64>(0),
+        ).optional().ok().flatten()
+    });
 
     let mut playback = state.playback.lock().map_err(|_| "State audio terkunci.".to_string())?;
+    let _ = persist_current_playback_position(&playback, &database_path);
     if playback.output_stream.is_none() {
         playback.output_stream = Some(
             OutputStreamBuilder::open_default_stream()
@@ -646,18 +722,31 @@ fn native_play_track(
     }
     sink.play();
     playback.sink = Some(sink);
-    playback.track_path = Some(file_path.canonicalize().unwrap_or(file_path).to_string_lossy().into_owned());
+    playback.track_path = Some(canonical_path_string);
+    playback.track_id = indexed_track_id;
     playback.duration_ms = duration_ms;
+    if let Some(track_id) = playback.track_id {
+        match open_database(&database_path).and_then(|connection| {
+            connection.execute(
+                "INSERT INTO playback_history (track_id, last_position_ms) VALUES (?1, 0)",
+                [track_id],
+            ).map(|_| ()).map_err(|error| format!("Riwayat playback gagal disimpan: {error}"))
+        }) {
+            Ok(()) => {}
+            Err(error) => eprintln!("[MPlayer] {error}"),
+        }
+    }
     Ok(snapshot_from_playback(&playback))
 }
 
 #[tauri::command]
 fn native_pause(state: State<'_, AppState>) -> Result<(), String> {
+    let database_path = state.database_path.clone();
     let playback = state.playback.lock().map_err(|_| "State audio terkunci.".to_string())?;
     if let Some(sink) = &playback.sink {
         sink.pause();
     }
-    Ok(())
+    persist_current_playback_position(&playback, &database_path)
 }
 
 #[tauri::command]
@@ -671,10 +760,12 @@ fn native_resume(state: State<'_, AppState>) -> Result<(), String> {
 
 #[tauri::command]
 fn native_seek(position_ms: u64, state: State<'_, AppState>) -> Result<(), String> {
+    let database_path = state.database_path.clone();
     let playback = state.playback.lock().map_err(|_| "State audio terkunci.".to_string())?;
     let sink = playback.sink.as_ref().ok_or("Belum ada track yang diputar.")?;
     sink.try_seek(Duration::from_millis(position_ms))
-        .map_err(|error| format!("Seek gagal: {error}"))
+        .map_err(|error| format!("Seek gagal: {error}"))?;
+    persist_current_playback_position(&playback, &database_path)
 }
 
 #[tauri::command]
@@ -692,11 +783,14 @@ fn native_set_volume(volume: f32, state: State<'_, AppState>) -> Result<(), Stri
 
 #[tauri::command]
 fn native_stop(state: State<'_, AppState>) -> Result<(), String> {
+    let database_path = state.database_path.clone();
     let mut playback = state.playback.lock().map_err(|_| "State audio terkunci.".to_string())?;
+    persist_current_playback_position(&playback, &database_path)?;
     if let Some(sink) = playback.sink.take() {
         sink.stop();
     }
     playback.track_path = None;
+    playback.track_id = None;
     playback.duration_ms = 0;
     Ok(())
 }
@@ -864,6 +958,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             native_runtime_info,
             native_list_tracks,
+            native_get_recent_history,
             native_list_playlists,
             native_create_playlist,
             native_rename_playlist,
