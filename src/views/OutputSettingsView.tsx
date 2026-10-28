@@ -4,6 +4,7 @@ import { OutputSettings } from '../types/audio';
 interface OutputSettingsViewProps {
   settings: OutputSettings;
   onUpdateSettings: (newSettings: OutputSettings) => void;
+  isNativeRuntime?: boolean;
 }
 
 const BUFFER_PRESETS = [
@@ -16,6 +17,7 @@ const BUFFER_PRESETS = [
 export const OutputSettingsView: React.FC<OutputSettingsViewProps> = ({
   settings,
   onUpdateSettings,
+  isNativeRuntime = false,
 }) => {
   const [showAdvancedDiagnostics, setShowAdvancedDiagnostics] = useState(false);
   const [glitches, setGlitches] = useState(0);
@@ -48,7 +50,7 @@ export const OutputSettingsView: React.FC<OutputSettingsViewProps> = ({
     setSpikePatternState('TIDAK DAPAT DIVERIFIKASI');
     showToast(
       'Diagnostik tidak tersedia',
-      'Preview browser tidak memiliki akses ke WASAPI atau jalur output native. Status bit-perfect tidak dapat diverifikasi.'
+      isNativeRuntime ? 'Backend native memakai output default sistem. WASAPI exclusive, loopback, dan verifikasi bit-perfect belum tersedia.' : 'Preview browser tidak memiliki akses ke jalur output native. Status bit-perfect tidak dapat diverifikasi.'
     );
   };
 
@@ -58,12 +60,12 @@ export const OutputSettingsView: React.FC<OutputSettingsViewProps> = ({
       'RESONANCE CORE - AUDIO ENGINE DIAGNOSTIC REPORT',
       '====================================================',
       `Waktu: ${new Date().toISOString()}`,
-      'Engine: Browser Web Audio preview; native WASAPI not connected',
-      `Preferred device setting: ${settings.activeDevice} (not connected to physical output in web preview)`,
+      `Engine: ${isNativeRuntime ? 'Rodio/CPAL native playback through default OS output' : 'Browser Web Audio preview'}`, 
+      `Preferred device setting: ${settings.activeDevice} (preference only; not applied to the active audio device)`, 
       `Requested buffer: ${settings.bufferSamples} samples (${settings.latencyMs}ms; preference only)`,
-      'Status: UNVERIFIED — native output path is unavailable in browser preview',
-      `Bit-perfect status: UNVERIFIED (browser preview cannot inspect the native output path)`,
-      'Spike Test: NOT RUN — native loopback/bit comparison is unavailable',
+      isNativeRuntime ? 'Status: native playback backend present; device-specific and exclusive output not implemented' : 'Status: UNVERIFIED — native output path is unavailable in browser preview',
+      'Bit-perfect status: UNVERIFIED',
+      'Spike Test: NOT RUN — loopback capture and bit comparison are unavailable',
       '====================================================',
     ].join('\n');
 
@@ -103,12 +105,12 @@ export const OutputSettingsView: React.FC<OutputSettingsViewProps> = ({
               </h1>
             </div>
             <p className="text-xs text-on-surface-variant font-body mt-0.5">
-              Preferensi ini hanya untuk rancangan antarmuka; backend output native belum terhubung.
+              {isNativeRuntime ? 'Backend native saat ini memakai output default sistem. Pemilihan device, mode eksklusif, pengaturan buffer, dan audit loopback belum diimplementasikan.' : 'Preferensi ini hanya untuk rancangan antarmuka; preview browser tidak mengendalikan output hardware native.'}
             </p>
           </div>
 
           <span className="px-2.5 py-1 bg-primary-container text-on-primary-container font-headline font-bold text-[11px] uppercase border border-outline">
-            PREVIEW · OUTPUT NATIVE UNVERIFIED
+            {isNativeRuntime ? 'NATIVE DEFAULT OUTPUT · ADVANCED PATH UNVERIFIED' : 'PREVIEW · OUTPUT NATIVE UNVERIFIED'}
           </span>
         </div>
 
@@ -120,6 +122,7 @@ export const OutputSettingsView: React.FC<OutputSettingsViewProps> = ({
           <div className="relative">
             <select
               value={settings.activeDevice}
+              disabled
               onChange={(e) => onUpdateSettings({ ...settings, activeDevice: e.target.value as any })}
               className="w-full bg-surface text-on-surface font-headline font-semibold text-sm p-3 appearance-none cursor-pointer focus:outline-none focus:bg-primary-container transition-colors pr-10 border-2 border-outline shadow-[2px_2px_0px_#1a1a1a]"
             >
@@ -146,7 +149,7 @@ export const OutputSettingsView: React.FC<OutputSettingsViewProps> = ({
             <div className="flex items-center justify-between mb-2">
               <span className="font-headline font-bold text-xs uppercase flex items-center gap-1.5">
                 <span className="material-symbols-outlined text-base">bolt</span>
-                Mode eksklusif (native belum tersedia)
+                Mode eksklusif (belum diimplementasikan)
               </span>
               {settings.wasapiMode === 'exclusive' && (
                 <span className="text-[10px] font-mono font-bold bg-primary text-white px-1.5 py-0.2">
@@ -155,7 +158,7 @@ export const OutputSettingsView: React.FC<OutputSettingsViewProps> = ({
               )}
             </div>
             <p className="text-[11px] font-body opacity-90 leading-relaxed">
-              Opsi target untuk implementasi native. Mode ini belum mengubah jalur audio pada preview web.
+              Kontrol ini belum terhubung ke backend audio. Output eksklusif harus diimplementasikan menggunakan API audio platform.
             </p>
           </div>
 
@@ -170,7 +173,7 @@ export const OutputSettingsView: React.FC<OutputSettingsViewProps> = ({
             <div className="flex items-center justify-between mb-2">
               <span className="font-headline font-bold text-xs uppercase flex items-center gap-1.5">
                 <span className="material-symbols-outlined text-base">layers</span>
-                Mode bersama (native belum tersedia)
+                Mode bersama (belum diimplementasikan)
               </span>
               {settings.wasapiMode === 'shared' && (
                 <span className="text-[10px] font-mono font-bold bg-primary text-white px-1.5 py-0.2">
@@ -191,10 +194,11 @@ export const OutputSettingsView: React.FC<OutputSettingsViewProps> = ({
               Peralihan Otomatis (Fallback)
             </span>
             <span className="text-[11px] text-on-surface-variant font-body">
-              Opsi fallback belum berjalan pada preview; backend audio native belum terhubung.
+              Fallback otomatis belum diimplementasikan pada backend native maupun preview.
             </span>
           </div>
           <button
+            disabled
             onClick={() =>
               onUpdateSettings({ ...settings, gracefulFallback: !settings.gracefulFallback })
             }
@@ -240,6 +244,7 @@ export const OutputSettingsView: React.FC<OutputSettingsViewProps> = ({
             </div>
             <input
               type="range"
+              disabled
               min="0"
               max="3"
               step="1"
@@ -268,7 +273,7 @@ export const OutputSettingsView: React.FC<OutputSettingsViewProps> = ({
               <span className="text-[10px] font-mono text-tertiary font-bold">{spikePatternState}</span>
             </div>
             <p className="text-xs text-on-surface-variant font-body">
-              Preview browser tidak dapat mengirim sinyal uji ke DAC native. Hasil audit tidak dapat diverifikasi sampai backend audio native tersedia.
+              {isNativeRuntime ? 'Backend playback native tersedia, tetapi pemilihan perangkat, WASAPI exclusive, loopback capture, dan uji bit-perfect belum diimplementasikan. Status jalur sinyal tidak dapat diverifikasi.' : 'Preview browser tidak dapat mengirim sinyal uji ke DAC native. Hasil audit tidak dapat diverifikasi pada preview web.'}
             </p>
             {spikeProgress > 0 && (
               <div className="w-full h-2 bg-surface-container overflow-hidden border border-outline">
