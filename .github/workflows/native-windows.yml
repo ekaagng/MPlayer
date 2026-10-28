@@ -27,6 +27,9 @@ jobs:
         with:
           workspaces: src-tauri -> target
 
+      - name: Generate Windows application icon
+        run: node scripts/generate-native-icon.mjs
+
       - name: Check native Tauri application
         run: cargo check --manifest-path src-tauri/Cargo.toml
 
