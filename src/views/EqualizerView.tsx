@@ -75,7 +75,7 @@ export const EqualizerView: React.FC<EqualizerViewProps> = ({ eqState, onUpdateE
     if (rawValue.trim() === '') return;
     const parsed = Number(rawValue);
     if (!Number.isFinite(parsed)) return;
-    const value = Math.max(-12, Math.min(12, parsed));
+    const value = Math.max(-12, Math.min(12, Math.round(parsed * 2) / 2));
     const bands = { ...eqState.bands, [frequency]: value };
     onUpdateEq({
       ...eqState,
@@ -170,7 +170,7 @@ export const EqualizerView: React.FC<EqualizerViewProps> = ({ eqState, onUpdateE
                   value={value}
                   onChange={(event) => handleBandChange(band.name, event.target.value)}
                   aria-label={band.name + ' gain in decibels'}
-                  className="h-8 w-full min-w-0 rounded-md border border-outline/20 bg-surface-bright px-0 text-center font-mono text-[9px] text-on-surface outline-none focus:border-primary focus:ring-1 focus:ring-primary sm:h-9 sm:text-xs"
+                  className="h-8 w-full min-w-0 appearance-none rounded-md border border-outline/20 bg-surface-bright px-0 text-center font-mono text-[9px] text-on-surface outline-none focus:border-primary focus:ring-1 focus:ring-primary sm:h-9 sm:text-xs"
                 />
               </div>
             );
