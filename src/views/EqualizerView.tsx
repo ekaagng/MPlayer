@@ -102,7 +102,7 @@ export const EqualizerView: React.FC<EqualizerViewProps> = ({ eqState, onUpdateE
               'min-h-10 rounded-full border px-4 text-xs font-bold transition-colors active:scale-[0.98] ' +
               (eqState.enabled
                 ? 'border-primary bg-primary text-on-primary'
-                : 'border-outline/20 bg-surface text-on-surface-variant') +
+                : 'border-outline/20 bg-surface text-on-surface-variant')
             }
           >
             {eqState.enabled ? 'EQ Aktif' : 'EQ Nonaktif'}
@@ -116,14 +116,14 @@ export const EqualizerView: React.FC<EqualizerViewProps> = ({ eqState, onUpdateE
               <button
                 key={key}
                 type="button"
-                    onClick={() => handlePresetSelect(key)}
+                onClick={() => handlePresetSelect(key)}
                 aria-pressed={selected}
                 className={
                   'flex min-h-11 items-center justify-between gap-2 rounded-xl border px-3 py-2 text-left text-xs font-semibold transition-colors active:scale-[0.98] ' +
                   (selected
                     ? 'border-primary bg-primary-container text-on-primary-container'
-                    : 'border-outline/15 bg-surface hover:bg-surface-container text-on-surface') +
-                    }
+                    : 'border-outline/15 bg-surface hover:bg-surface-container text-on-surface')
+                }
               >
                 <span className="truncate">{PRESETS[key].label}</span>
                 {selected && <span className="material-symbols-outlined text-base">check_circle</span>}
@@ -164,7 +164,7 @@ export const EqualizerView: React.FC<EqualizerViewProps> = ({ eqState, onUpdateE
                 <input
                   id={inputId}
                   type="number"
-                        inputMode="decimal"
+                  inputMode="decimal"
                   min="-12"
                   max="12"
                   step="0.5"
