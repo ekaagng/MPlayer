@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { AppView, Track, EqualizerState, OutputSettings } from './types/audio';
 import { MOCK_TRACKS } from './data/mockTracks';
 import { audioEngine } from './services/audioEngine';
+import { getNativeRuntimeInfo, listNativeTracks, toAppTrack } from './services/nativeBridge';
 import { Header } from './components/Header';
 import { LibraryView } from './views/LibraryView';
 import { NowPlayingView } from './views/NowPlayingView';
@@ -14,6 +15,8 @@ export default function App() {
   const [currentTrack, setCurrentTrack] = useState<Track | null>(MOCK_TRACKS[1] ?? null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
+  const [currentDurationMs, setCurrentDurationMs] = useState(0);
+  const [isNativeRuntime, setIsNativeRuntime] = useState(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
 
   const [eqState, setEqState] = useState<EqualizerState>({
@@ -47,11 +50,27 @@ export default function App() {
   });
 
   useEffect(() => {
+    let mounted = true;
     const unsubscribeTelemetry = audioEngine.subscribeTelemetry((telemetry) => {
+      setCurrentDurationMs(telemetry.durationMs);
       if (audioEngine.isCurrentlyPlaying()) setCurrentTimeMs(telemetry.currentTimeMs);
     });
     const unsubscribeEnd = audioEngine.subscribeTrackEnd(() => setIsPlaying(false));
+
+    void getNativeRuntimeInfo().then(async (runtime) => {
+      if (!mounted) return;
+      setIsNativeRuntime(Boolean(runtime));
+      if (runtime) {
+        const files = await listNativeTracks();
+        if (!mounted) return;
+        setCurrentTrack(files.length > 0 ? toAppTrack(files[0], 0) : null);
+      }
+    }).catch((error: unknown) => {
+      console.error('[MPlayer] Native runtime initialization failed:', error);
+    });
+
     return () => {
+      mounted = false;
       unsubscribeTelemetry();
       unsubscribeEnd();
     };
@@ -65,6 +84,7 @@ export default function App() {
   const handlePlayTrack = async (track: Track) => {
     setCurrentTrack(track);
     setCurrentTimeMs(0);
+    setCurrentDurationMs(0);
     setPlaybackError(null);
     try {
       await audioEngine.playTrack(track, 0);
@@ -148,6 +168,9 @@ export default function App() {
             currentTrack={currentTrack}
             isPlaying={isPlaying}
             currentTimeMs={currentTimeMs}
+            durationMs={currentDurationMs}
+            isNativeRuntime={isNativeRuntime}
+            canNavigate={!isNativeRuntime || !currentTrack?.id.startsWith('native-')}
             playbackError={playbackError}
             onTogglePlay={handleTogglePlay}
             onPrev={handlePrevTrack}
