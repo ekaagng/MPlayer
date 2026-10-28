@@ -1,43 +1,33 @@
-import { EqualizerState, EQFrequency, Track } from '../types/audio';
-import { linearToDb } from '../utils/audioMath';
-
-const FREQUENCIES: { name: EQFrequency; freq: number }[] = [
-  { name: '31Hz', freq: 31 },
-  { name: '62Hz', freq: 62 },
-  { name: '125Hz', freq: 125 },
-  { name: '250Hz', freq: 250 },
-  { name: '500Hz', freq: 500 },
-  { name: '1kHz', freq: 1000 },
-  { name: '2kHz', freq: 2000 },
-  { name: '4kHz', freq: 4000 },
-  { name: '8kHz', freq: 8000 },
-  { name: '16kHz', freq: 16000 },
-];
-
-export interface AudioTelemetry {
-  currentTimeMs: number;
-  durationMs: number;
-  rmsLeft: number;
-  rmsRight: number;
-  peakLeft: number;
-  peakRight: number;
-  frequencyData: Uint8Array;
-}
-
+ * provide a URL through registerTrackSource(), or use a native desktop backend.
+ */
 class AudioEngine {
   private ctx: AudioContext | null = null;
+  private audio: HTMLAudioElement | null = null;
+  private mediaSourceNode: MediaElementAudioSourceNode | null = null;
+
   private preampNode: GainNode | null = null;
   private filterNodes: Map<EQFrequency, BiquadFilterNode> = new Map();
   private limiterNode: DynamicsCompressorNode | null = null;
   private analyserNode: AnalyserNode | null = null;
+  private channelSplitter: ChannelSplitterNode | null = null;
+  private leftAnalyser: AnalyserNode | null = null;
+  private rightAnalyser: AnalyserNode | null = null;
+  private leftMeterSilence: GainNode | null = null;
+  private rightMeterSilence: GainNode | null = null;
   private masterGain: GainNode | null = null;
-  private synthInterval: number | null = null;
-  private animationFrameId: number | null = null;
 
+  private animationFrameId: number | null = null;
   private isPlaying = false;
   private playbackOffsetMs = 0;
-  private playStartTime = 0;
   private currentTrack: Track | null = null;
+  private activeSource = '';
+  private pendingSeekMs: number | null = null;
+  private volume = 0.85;
+
+  private sourceOverrides: Map<string, string> = new Map();
+  private telemetryListeners: Set<(telemetry: AudioTelemetry) => void> = new Set();
+  private trackEndListeners: Set<() => void> = new Set();
+
   private eqState: EqualizerState = {
     enabled: true,
     preamp: -1.5,
@@ -58,270 +48,196 @@ class AudioEngine {
     autoPreamp: true,
   };
 
-  private telemetryListeners: Set<(telemetry: AudioTelemetry) => void> = new Set();
-  private trackEndListeners: Set<() => void> = new Set();
+  /** Register a browser-playable source for a track (for example, a Blob URL). */
+  public registerTrackSource(trackId: string, sourceUrl: string): void {
+    const source = sourceUrl.trim();
+    if (!source) throw new Error('URL audio tidak boleh kosong.');
 
-  private initContext() {
-    if (this.ctx) return;
-    const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    this.ctx = new AudioContextClass();
-
-    this.preampNode = this.ctx.createGain();
-    this.preampNode.gain.value = Math.pow(10, this.eqState.preamp / 20);
-
-    // Build 10-band peaking filters in cascade
-    let lastNode: AudioNode = this.preampNode;
-    FREQUENCIES.forEach(({ name, freq }) => {
-      const filter = this.ctx!.createBiquadFilter();
-      filter.type = 'peaking';
-      filter.frequency.value = freq;
-      filter.Q.value = 1.41;
-      filter.gain.value = this.eqState.bands[name] || 0;
-      this.filterNodes.set(name, filter);
-      lastNode.connect(filter);
-      lastNode = filter;
-    });
-
-    // Limiter
-    this.limiterNode = this.ctx.createDynamicsCompressor();
-    this.limiterNode.threshold.value = 0.0;
-    this.limiterNode.knee.value = 3.0;
-    this.limiterNode.ratio.value = 20.0;
-    this.limiterNode.attack.value = 0.002;
-    this.limiterNode.release.value = 0.1;
-    lastNode.connect(this.limiterNode);
-
-    // Analyser
-    this.analyserNode = this.ctx.createAnalyser();
-    this.analyserNode.fftSize = 256;
-    this.analyserNode.smoothingTimeConstant = 0.8;
-    this.limiterNode.connect(this.analyserNode);
-
-    // Master Output
-    this.masterGain = this.ctx.createGain();
-    this.masterGain.gain.value = 0.85;
-    this.analyserNode.connect(this.masterGain);
-    this.masterGain.connect(this.ctx.destination);
-  }
-
-  public subscribeTelemetry(listener: (telemetry: AudioTelemetry) => void) {
-    this.telemetryListeners.add(listener);
-    return () => this.telemetryListeners.delete(listener);
-  }
-
-  public subscribeTrackEnd(listener: () => void) {
-    this.trackEndListeners.add(listener);
-    return () => this.trackEndListeners.delete(listener);
-  }
-
-  public setVolume(vol: number) {
-    if (this.masterGain) {
-      this.masterGain.gain.value = Math.max(0, Math.min(1, vol));
+    const previous = this.sourceOverrides.get(trackId);
+    if (previous && previous !== source && previous.startsWith('blob:')) {
+      URL.revokeObjectURL(previous);
     }
+    this.sourceOverrides.set(trackId, source);
   }
 
-  public setEqualizer(eq: EqualizerState) {
-    this.eqState = eq;
-    this.applyEq();
-  }
-
-  private applyEq() {
-    if (!this.ctx || !this.preampNode) return;
-
-    const bypass = !this.eqState.enabled || this.eqState.abMode === 'B';
-    const preampDb = bypass ? 0.0 : this.eqState.preamp;
-    this.preampNode.gain.setTargetAtTime(Math.pow(10, preampDb / 20), this.ctx.currentTime, 0.05);
-
-    this.filterNodes.forEach((node, freqName) => {
-      const gainVal = bypass ? 0.0 : (this.eqState.bands[freqName] || 0);
-      node.gain.setTargetAtTime(gainVal, this.ctx!.currentTime, 0.05);
-    });
-  }
-
-  public async playTrack(track: Track, startFromMs?: number) {
+       const source = this.resolveTrackSource(track);
     this.initContext();
-    if (this.ctx && this.ctx.state === 'suspended') {
-      await this.ctx.resume();
-    }
+
+    const audio = this.audio!;
+    const sourceChanged = source !== this.activeSource;
+
+    // Pause the previous source before changing the active track.
+    if (sourceChanged) audio.pause();
 
     this.currentTrack = track;
-    this.isPlaying = true;
-    this.playbackOffsetMs = startFromMs ?? 0;
-    this.playStartTime = this.ctx!.currentTime;
+    this.playbackOffsetMs = this.clampPosition(startFromMs, track.duration * 1000);
+    this.pendingSeekMs = this.playbackOffsetMs;
 
-    this.startSynthesizerLoop();
+    if (sourceChanged) {
+      this.activeSource = source;
+      audio.src = source;
+      audio.load();
+      await this.waitForMetadata();
+    } else if (audio.readyState < HTMLMediaElement.HAVE_METADATA) {
+      await this.waitForMetadata();
+    }
+
+    if (this.ctx?.state === 'suspended') await this.ctx.resume();
+
+    const durationMs = this.getDurationMs();
+    const seekMs = this.clampPosition(startFromMs, durationMs || track.duration * 1000);
+    this.pendingSeekMs = seekMs;
+    try {
+      audio.currentTime = seekMs / 1000;
+      this.pendingSeekMs = null;
+    } catch {
+      // Some media backends do not allow seeking until metadata is available.
+      // Keep the pending seek; the loadedmetadata handler applies it when possible.
+    }
+
+    await audio.play();
+    this.isPlaying = true;
+    this.playbackOffsetMs = audio.currentTime * 1000;
     this.startTelemetryLoop();
   }
 
-  public pause() {
-    if (!this.isPlaying) return;
-    this.isPlaying = false;
-    if (this.ctx) {
-      this.playbackOffsetMs += (this.ctx.currentTime - this.playStartTime) * 1000;
-    }
-    this.stopSynthesizerLoop();
-  }
-
-  public resume() {
-    if (!this.currentTrack) return;
-    this.playTrack(this.currentTrack, this.playbackOffsetMs);
-  }
-
-  public seek(toMs: number) {
-    const wasPlaying = this.isPlaying;
-    this.playbackOffsetMs = Math.max(0, toMs);
-    if (this.ctx) {
-      this.playStartTime = this.ctx.currentTime;
-    }
-    if (!wasPlaying && this.currentTrack) {
+  public pause(): void {
+    if (!this.audio || this.audio.paused) {
+      this.isPlaying = false;
+      this.stopTelemetryLoop();
       this.emitTelemetry();
-    }
-  }
-
-  public isCurrentlyPlaying(): boolean {
-    return this.isPlaying;
-  }
-
-  public getCurrentTrack(): Track | null {
-    return this.currentTrack;
-  }
-
-  public getCurrentPositionMs(): number {
-    if (!this.isPlaying || !this.ctx) return this.playbackOffsetMs;
-    const elapsed = (this.ctx.currentTime - this.playStartTime) * 1000;
-    return this.playbackOffsetMs + elapsed;
-  }
-
-  // Melodic jazz synthesizer generating harmonic tones through our real Web Audio chain
-  private startSynthesizerLoop() {
-    this.stopSynthesizerLoop();
-    if (!this.ctx || !this.preampNode) return;
-
-    let beat = 0;
-    const chords = [
-      [220.0, 261.63, 329.63, 392.0], // Am7
-      [293.66, 349.23, 440.0, 523.25], // Dm7
-      [196.0, 246.94, 293.66, 392.0], // G7
-      [261.63, 329.63, 392.0, 493.88], // Cmaj7
-      [174.61, 220.0, 261.63, 329.63], // Fmaj7
-      [246.94, 293.66, 349.23, 440.0], // Bm7b5
-      [164.81, 207.65, 246.94, 329.63], // E7
-    ];
-
-    this.synthInterval = window.setInterval(() => {
-      if (!this.isPlaying || !this.ctx || !this.preampNode) return;
-
-      const chordIndex = Math.floor(beat / 4) % chords.length;
-      const currentChord = chords[chordIndex];
-
-      // Play soft warm electric piano chord note
-      const noteFreq = currentChord[beat % currentChord.length];
-      const osc = this.ctx.createOscillator();
-      const noteGain = this.ctx.createGain();
-
-      osc.type = beat % 2 === 0 ? 'sine' : 'triangle';
-      osc.frequency.setValueAtTime(noteFreq, this.ctx.currentTime);
-
-      const noteVol = 0.07;
-      noteGain.gain.setValueAtTime(noteVol, this.ctx.currentTime);
-      noteGain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.45);
-
-      osc.connect(noteGain);
-      noteGain.connect(this.preampNode);
-
-      osc.start();
-      osc.stop(this.ctx.currentTime + 0.5);
-
-      // Walking bass on every beat
-      if (beat % 2 === 0) {
-        const bassOsc = this.ctx.createOscillator();
-        const bassGain = this.ctx.createGain();
-        bassOsc.type = 'triangle';
-        bassOsc.frequency.setValueAtTime(currentChord[0] / 2, this.ctx.currentTime);
-        bassGain.gain.setValueAtTime(0.12, this.ctx.currentTime);
-        bassGain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.5);
-        bassOsc.connect(bassGain);
-        bassGain.connect(this.preampNode);
-        bassOsc.start();
-        bassOsc.stop(this.ctx.currentTime + 0.55);
-      }
-
-      beat++;
-    }, 450);
-  }
-
-  private stopSynthesizerLoop() {
-    if (this.synthInterval) {
-      clearInterval(this.synthInterval);
-      this.synthInterval = null;
-    }
-  }
-
-  private startTelemetryLoop() {
-    const loop = () => {
-      this.emitTelemetry();
-      if (this.isPlaying) {
-        // Check if track ended
-        if (this.currentTrack) {
-          const pos = this.getCurrentPositionMs();
-          if (pos >= this.currentTrack.duration * 1000) {
-            this.pause();
-            this.seek(0);
-            this.trackEndListeners.forEach((l) => l());
-            return;
-          }
-        }
-        this.animationFrameId = requestAnimationFrame(loop);
-      }
-    };
-    if (this.animationFrameId) cancelAnimationFrame(this.animationFrameId);
-    this.animationFrameId = requestAnimationFrame(loop);
-  }
-
-  private emitTelemetry() {
-    if (!this.analyserNode) {
-      const freqData = new Uint8Array(64);
-      this.telemetryListeners.forEach((l) =>
-        l({
-          currentTimeMs: this.playbackOffsetMs,
-          durationMs: this.currentTrack ? this.currentTrack.duration * 1000 : 0,
-          rmsLeft: -60,
-          rmsRight: -60,
-          peakLeft: -60,
-          peakRight: -60,
-          frequencyData: freqData,
-        })
-      );
       return;
     }
 
-    const bufferLength = this.analyserNode.frequencyBinCount;
-    const freqData = new Uint8Array(bufferLength);
-    this.analyserNode.getByteFrequencyData(freqData);
+    this.audio.pause();
+    this.isPlaying = false;
+    this.playbackOffsetMs = this.audio.currentTime * 1000;
+    this.stopTelemetryLoop();
+    this.emitTelemetry();
+  }
 
-    // Calculate RMS & peak from frequency buffer
-    let sum = 0;
-    let peak = 0;
-    for (let i = 0; i < bufferLength; i++) {
-      const val = freqData[i] / 255;
-      sum += val * val;
-      if (val > peak) peak = val;
+  public resume(): void {
+    if (!this.currentTrack) return;
+    void this.playTrack(this.currentTrack, this.getCurrentPositionMs()).catch((error: unknown) => {
+      console.error('[AudioEngine] Resume failed:', error);
+    });
+  }
+
+  public seek(toMs: number): void {
+    const durationMs = this.getDurationMs() || (this.currentTrack?.duration ?? 0) * 1000;
+    const targetMs = this.clampPosition(toMs, durationMs);
+    this.playbackOffsetMs = targetMs;
+    this.pendingSeekMs = targetMs;
+
+    if (this.audio && this.currentTrack && this.audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
+      try {
+        this.audio.currentTime = targetMs / 1000;
+        this.pendingSeekMs = null;
+      } catch {
+        // Keep pendingSeekMs; it will be retried after metadata becomes available.
+      }
     }
-    const rms = Math.sqrt(sum / bufferLength);
 
-    const leftRmsDb = linearToDb(rms, -48);
-    const rightRmsDb = linearToDb(rms * 0.94, -48);
-    const leftPeakDb = linearToDb(peak, -36);
-    const rightPeakDb = linearToDb(peak * 0.95, -36);
+    this.emitTelemetry();
+  }
 
+      audio.addEventListener('error', onError, { once: true });
+    });
+  }
+
+  private getMediaErrorMessage(): string {
+    const code = this.audio?.error?.code;
+    const details: Record<number, string> = {
+      1: 'Pemuatan audio dibatalkan.',
+      2: 'Terjadi kesalahan jaringan saat memuat audio.',
+      3: 'Audio gagal didekode; file mungkin rusak atau codec tidak didukung browser.',
+      4: 'Format atau sumber audio tidak didukung browser.',
+    };
+    return details[code ?? 0] ?? 'Audio gagal dimuat. Periksa URL, format file, dan dukungan codec.';
+  }
+
+  private getDurationMs(): number {
+    if (this.audio && Number.isFinite(this.audio.duration) && this.audio.duration > 0) {
+      return this.audio.duration * 1000;
+    }
+    return (this.currentTrack?.duration ?? 0) * 1000;
+  }
+
+  private clampPosition(positionMs: number, durationMs: number): number {
+    const safePosition = Number.isFinite(positionMs) ? Math.max(0, positionMs) : 0;
+    if (!Number.isFinite(durationMs) || durationMs <= 0) return safePosition;
+    return Math.min(safePosition, durationMs);
+  }
+
+  private applyEq(): void {
+    if (!this.ctx || !this.preampNode) return;
+
+    const bypass = !this.eqState.enabled || this.eqState.abMode === 'B';
+    const preampDb = bypass ? 0 : this.eqState.preamp;
+    this.preampNode.gain.setTargetAtTime(Math.pow(10, preampDb / 20), this.ctx.currentTime, 0.05);
+
+    this.filterNodes.forEach((node, freqName) => {
+      node.gain.setTargetAtTime(bypass ? 0 : (this.eqState.bands[freqName] ?? 0), this.ctx!.currentTime, 0.05);
+    });
+  }
+
+  private startTelemetryLoop(): void {
+    this.stopTelemetryLoop();
+    const loop = () => {
+      this.emitTelemetry();
+      if (this.isPlaying && this.audio && !this.audio.paused) {
+        this.animationFrameId = window.requestAnimationFrame(loop);
+      } else {
+        this.animationFrameId = null;
+      }
+    };
+    this.animationFrameId = window.requestAnimationFrame(loop);
+  }
+
+  private stopTelemetryLoop(): void {
+    if (this.animationFrameId !== null) {
+      window.cancelAnimationFrame(this.animationFrameId);
+      this.animationFrameId = null;
+    }
+  }
+private measureLevel(analyser: AnalyserNode | null): { rmsDb: number; peakDb: number } {
+    if (!analyser) return { rmsDb: -60, peakDb: -60 };
+
+    const samples = new Float32Array(analyser.fftSize);
+    analyser.getFloatTimeDomainData(samples);
+    let sumSquares = 0;
+    let peak = 0;
+
+    for (const sample of samples) {
+      const absolute = Math.abs(sample);
+      sumSquares += sample * sample;
+      if (absolute > peak) peak = absolute;
+    }
+
+    const rms = Math.sqrt(sumSquares / Math.max(1, samples.length));
+    return {
+      rmsDb: linearToDb(rms, -60),
+      peakDb: linearToDb(peak, -60),
+    };
+  }
+
+  private emitTelemetry(): void {
+    const frequencyData = this.analyserNode
+      ? new Uint8Array(this.analyserNode.frequencyBinCount)
+      : new Uint8Array(64);
+
+    if (this.analyserNode) this.analyserNode.getByteFrequencyData(frequencyData);
+
+    const left = this.measureLevel(this.leftAnalyser);
+    const right = this.measureLevel(this.rightAnalyser);
     const telemetry: AudioTelemetry = {
       currentTimeMs: this.getCurrentPositionMs(),
-      durationMs: this.currentTrack ? this.currentTrack.duration * 1000 : 0,
-      rmsLeft: leftRmsDb,
-      rmsRight: rightRmsDb,
-      peakLeft: leftPeakDb,
-      peakRight: rightPeakDb,
-      frequencyData: freqData,
+      durationMs: this.getDurationMs(),
+      rmsLeft: left.rmsDb,
+      rmsRight: right.rmsDb,
+      peakLeft: left.peakDb,
+      peakRight: right.peakDb,
+      frequencyData,
     };
 
     this.telemetryListeners.forEach((listener) => listener(telemetry));
