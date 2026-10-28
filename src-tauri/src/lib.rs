@@ -292,7 +292,7 @@ fn native_play_track(
     sink.set_volume(playback.volume.clamp(0.0, 1.0));
     if let Some(position) = start_from_ms.filter(|position| *position > 0) {
         sink.pause();
-        sink.try_seek(Duration::from_millis(position.min(duration_ms.max(position))))
+        sink.try_seek(Duration::from_millis(if duration_ms > 0 { position.min(duration_ms) } else { position }))
             .map_err(|error| format!("Seek gagal: {error}"))?;
     }
     sink.play();
